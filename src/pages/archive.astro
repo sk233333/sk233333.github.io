@@ -9,6 +9,9 @@ const sortedPostsList = await getSortedPostsList();
 ---
 
 <MainGridLayout title={i18n(I18nKey.archive)}>
-    <ArchivePanel sortedPosts={sortedPostsList} client:only="svelte"></ArchivePanel>
+    <ArchivePanel sortedPosts={sortedPostsList.map(p => ({
+  ...p,
+  data: { ...p.data, category: p.data.category ?? undefined }
+}))} client:only="svelte"></ArchivePanel>
 </MainGridLayout>
 
