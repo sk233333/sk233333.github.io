@@ -24,9 +24,9 @@ jobs:
           fetch-depth: 0
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda # v4.1.0
         with:
-          version: 9
+          version: 9          # ← 新增，防止没读到你本地的 packageManager
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -38,7 +38,7 @@ jobs:
         uses: actions/configure-pages@v5
 
       - name: Install dependencies
-        run: pnpm install --no-frozen-lockfile
+        run: pnpm install --no-lockfile
 
       - name: Build site
         run: pnpm build
