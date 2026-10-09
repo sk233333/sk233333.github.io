@@ -48,6 +48,8 @@ ros2 topic list
 ros2 topic info /turtle1/cmd_vel -v
 ```
 ![ros2xwg49行](../../assets/images/p2-1.png)
+
+
 滑到第一行Type会显示：Type: geometry_msgs/msg/Twist （Twist是我们写代码要import的类型
 
 
