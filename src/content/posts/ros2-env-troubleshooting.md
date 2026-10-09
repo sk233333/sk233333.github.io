@@ -2,6 +2,7 @@
 title: "ROS 2 入门踩坑实录：从跟着教程走到搞懂环境配置"
 published: 2026-10-03
 description: "记录从 sequence size exceeds remaining buffer 到 ModuleNotFoundError 的完整排查过程"
+image: "~/src/assets/images/demo-banner.png"
 tags: [ROS2, Linux, 踩坑记录]
 ---
 
