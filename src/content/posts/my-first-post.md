@@ -34,6 +34,7 @@ ros2 run turtlesim turtlesim_node
 会弹出一个蓝底窗口，中间有只海龟。
 ![ros2xwg35行](../../assets/images/xwg.png)
 
+
 ### 现在顺便看一眼海龟有哪些话题（这一步很重要！！！）保持之前窗口运行，新开一个窗口 
 ```bash
 ros2 topic list
@@ -46,7 +47,7 @@ ros2 topic list
 ```bash
 ros2 topic info /turtle1/cmd_vel -v
 ```
-![ros2xwg49行](../../assets/images/p2-1.png)
+![ros2xwg49行](../../assets/images/p2-1.png){width=500}
 滑到第一行Type会显示：Type: geometry_msgs/msg/Twist （Twist是我们写代码要import的类型
 
 
@@ -54,7 +55,9 @@ ros2 topic info /turtle1/cmd_vel -v
 ```bash
 ros2 interface show geometry_msgs/msg/Twist
 ```
-![ros2xwg57行](../../assets/images/p2-2.png)
+![ros2xwg57行](../../assets/images/p2-2.png){width=500}
+
+
 Vector3  linear float64 x float64 y float64 z （xyz方向线速度
 Vector3  angular float64 x float64 y float64 z （xyz方向加速度
 
