@@ -3,14 +3,33 @@ title: "ROS2 节点+服务项目-小乌龟转圈详细解读"
 published: 2026-10-09
 description: "用大量的注释带你了解这个项目背后可以学到什么"
 image: ""
-tags: [随笔]
-category: 日常
+category: "ROS2学习日常"
 draft: false
+tags: [ROS2, PYTHON, C++, 节点, 服务, 小乌龟]
 ---
+### 这个是github同款开源小项目解读
 
-## 小标题一
+## 1.检测ros2环境是否生效
+```bash
+ros2 topic list
+```
+如果能正常输出无error(即使为空列表)，说明你的ROS2环境已经正常生效。
 
-正文第一段。
+## 2.检查你的ros2小海龟是否正常
+```bash
+ros2 pkg list | grep turtlesim
+```
+如果以正常输出turtlesim，没有的话需要按照下面方式安装：
+```bash
+sudo apt install ros-humble-turtlesim -y
+# jazzy用户把humble换成jazzy
+```
+
+先手动跑一下海龟，确认环境没问题
+```bash
+ros2 run turtlesim turtlesim_node
+```
+会弹出一个蓝底窗口，中间有只海龟。
 
 想强调就 **加粗**，想写代码就 `这样`。
 
