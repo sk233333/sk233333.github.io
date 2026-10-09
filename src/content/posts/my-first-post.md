@@ -1,7 +1,7 @@
 ---
-title:ROS2 节点+服务项目-小乌龟转圈详细解读
+title: "ROS2 节点+服务项目-小乌龟转圈详细解读"
 published: 2026-10-09
-description: 用大量的注释带你了解这个项目背后可以学到什么
+description: "用大量的注释带你了解这个项目背后可以学到什么"
 image: ""
 tags: [随笔]
 category: 日常
