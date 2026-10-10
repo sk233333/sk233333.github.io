@@ -1,4 +1,4 @@
----
+<img width="1460" height="639" alt="image" src="https://github.com/user-attachments/assets/0377414e-3397-45cd-a02f-2953bdd6736a" />---
 title: "ROS2 节点+服务项目-小乌龟转圈详细解读"
 published: 2026-10-09
 description: "用大量的注释带你了解这个项目背后可以学到什么"
@@ -1050,14 +1050,27 @@ ros2 run py_turtle_control turtle_circle --ros-args -p linear_speed:=-2.0 -p ang
 ```
 
 
+![ros2xwg1053](/image/xwg_node/p11-1.png)
+
+
+#### 龟呢？，执行最后一个直线后退命令飞出去了。
+
+
 #### 1.改订阅者端
-打印的有点快了，在终端 3（C++)让它每50条打印一次
+觉得打印的有点快了，在终端 3（C++)让它每100条打印一次
 
 
 按CTRL + C退出，再执行
 ```bash
-ros2 run cpp_status_listener status_listener --ros-args -p print_every:=50
+ros2 run cpp_status_listener status_listener --ros-args -p print_every:=100
 ```
+
+
+![ros2xwg1069](/image/xwg_node/p11-2.png)
+
+
+打印速度明显下降了
+
 
 
 ## 以上就是整个项目的全过程
