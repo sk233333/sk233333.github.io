@@ -172,7 +172,7 @@ ros2 pkg create cpp_status_listener --build-type ament_cmake --dependencies rclc
 ```
 	
 
-![ros2xwg175](/public/image/xwg_node/p3-1.png)
+![ros2xwg175](/image/xwg_node/p3-1.png)
 
 
 确认目录下有三个包之后给接口包加一个msg目录：
@@ -996,6 +996,7 @@ ros2 run turtlesim turtlesim_node
 
 ### 终端 2 —— 启动 Python 节点：
 ```bash
+cd ~/xwg/turtle_ws
 source /opt/ros/humble/setup.bash
 source ~/xwg/turtle_ws/install/setup.bash
 ros2 run py_turtle_control turtle_circle
@@ -1005,6 +1006,7 @@ ros2 run py_turtle_control turtle_circle
 
 ### 终端 3 —— 启动 C++ 订阅者：
 ```bash
+cd ~/xwg/turtle_ws
 source /opt/ros/humble/setup.bash
 source ~/xwg/turtle_ws/install/setup.bash
 ros2 run cpp_status_listener status_listener
@@ -1016,6 +1018,12 @@ ros2 run cpp_status_listener status_listener
 
 
 ### 改参数玩一玩（不用改代码）
+
+
+#### 1.改发布者端
+
+
+在终端 2（python）：按CTRL + C退出运行状态，再执行以下操作（每次修改都要CTRL + C退出后再执行，不然会两个窗口发布消息，龟龟会交替接收他们两个消息，小海龟会被玩坏的！
 
 
 画大一点的圆：减小转弯速度
@@ -1036,9 +1044,19 @@ ros2 run py_turtle_control turtle_circle --ros-args -p linear_speed:=3.0
 ```
 
 
-C++ 那边改成每 5 条打印一次
+直线后退（不转弯）
 ```bash
-ros2 run cpp_status_listener status_listener --ros-args -p print_every:=5
+ros2 run py_turtle_control turtle_circle --ros-args -p linear_speed:=-2.0 -p angular_speed:=0.0
+```
+
+
+#### 1.改订阅者端
+打印的有点快了，在终端 3（C++)让它每50条打印一次
+
+
+按CTRL + C退出，再执行
+```bash
+ros2 run cpp_status_listener status_listener --ros-args -p print_every:=50
 ```
 
 
