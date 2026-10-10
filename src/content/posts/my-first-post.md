@@ -172,7 +172,7 @@ ros2 pkg create cpp_status_listener --build-type ament_cmake --dependencies rclc
 ```
 	
 
-![ros2xwg175]()
+![ros2xwg175](public/image/xwg_node/p3-1.png)
 
 
 确认目录下有三个包之后给接口包加一个msg目录：
