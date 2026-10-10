@@ -7,10 +7,7 @@ category: "ROS2学习日常"
 draft: false
 tags: [ROS2, PYTHON, C++, 节点, 服务, 小乌龟]
 ---
-# 这个是github同款开源小项目解读
-
-
-[xwg_project13](https://github.com/sk233333/xwg_project)
+# 这个是github同款开源小项目解读 [xwg_project13](https://github.com/sk233333/xwg_project)
 
 
 ## 1.检测ros2环境是否生效
