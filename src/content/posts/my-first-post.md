@@ -616,6 +616,98 @@ if __name__ == '__main__':
 保证只有直接运行这个文件时才启动节点。ros2 run 的机制是"导入这个模块并调用它的 main()"，没有这行的话，导入时就会自动启动一个节点，出现"莫名多出一个节点"的诡异现象。
 
 
+## 修改python发布者包文件(py_turtle_control
+
+
+### 修改setup.py
+
+
+1.从 find_packages(exclude=['test']) 改为 packages=[package_name] ,对于单节点、结构简单的包，直接手动指定包名列表更明确；原写法依赖 find_packages 自动搜索，新写法减少了隐式依赖。
+
+
+2.新增了 'turtle_circle = py_turtle_control.turtle_circle:main',这是 ROS 2 注册可执行节点的核心。配置后，终端才能识别 ros2 run py_turtle_control turtle_circle 命令。它指向了你上一轮代码中 turtle_circle.py 里的 main 函数。原文件这里是空的，导致无法运行节点。
+
+
+3.description 从默认的 'TODO: Package description' 改为实际描述 '用 Python 控制海龟转圈并转发状态'；维护者信息更新为你的名字和邮箱。完善包元数据，消除 TODO 占位符，让包信息更规范。
+
+
+4.删除了原文件中的 'test': ['pytest'],当前学习阶段暂未编写单元测试，移除可保持配置精简（后续写测试时可加回）。
+
+
+5.从 from setuptools import find_packages, setup 改为 from setuptools import setup，因为不再使用 find_packages()，对应导入被移除，代码更干净。
+
+
+上面修改了更好，只把turtle_circle = py_turtle_control.turtle_circle:main'加上也可以运行 
+
+
+```python
+from setuptools import setup
+#setup() 是 Python官方打包工具 setuptools 的核心函数，ROS2的colcon build底层就是在调用它
+
+package_name = 'py_turtle_control'
+#必须和目录名、package.xml 里的 <name> 一致
+
+#所有配置从这里开始，下面每一个参数都是 setup() 的关键字参数
+setup(
+    name=package_name,
+    version='0.0.0',
+    #name-包名（ROS 2 和 Python 都认这个），version-版本号（ROS 2 默认 0.0.0，可改）
+    
+    packages=[package_name],
+    #	告诉 setuptools：哪些目录是 Python 包​，即内层的： 'py_turtle_control'
+    
+    data_files=[
+        ('share/ament_index/resource_index/packages', ['resource/' + package_name]),
+        ('share/' + package_name, ['package.xml']),
+    ],
+    #data_files 是 setuptools 的参数
+    #data_files=[ (安装目标路径, [源文件路径1, 源文件路径2, ...]), (安装目标路径, [源文件路径1, ...]),
+    #['resource/'+package_name]='resource/py_turtle_control, 这个文件是ros2 pkg create自动生成的，没有这个标记文件就检测不到你的包。
+    #['package.xml']是 ROS2包的身份证，没有 package.xml安装到share下 → ROS2运行时找不到包的元数据
+    
+    
+    install_requires=['setuptools'],
+    #作用： 声明 Python 依赖，因为 setup.py本身就是 setuptools脚本，如果用了 numpy、yaml (pip 安装的第三方库要加到列表里，内置如math不用
+    
+    zip_safe=True,
+    #告诉 setuptools：这个包可以安全以 zip形式运行，一般默认即可
+    
+    maintainer='you',
+    maintainer_email='you@example.com',
+    description='用 Python 控制海龟转圈并转发状态',
+    license='Apache-2.0',
+    #元数据，分别是维护者名字，联系方式，ros2 pkg xml显示的描述，开源协议（不影响运行，但 package.xml 里也要有对应字段，两边保持一致   
+     
+    entry_points={
+        'console_scripts': [
+            # 左边是终端命令名（ros2 run 时用的命令名），右边是 内层包名+python代码名:调用的函数名
+            'turtle_circle = py_turtle_control.turtle_circle:main',
+        ],
+    },
+)
+```
+
+
+### 2.package.xml声明依赖（package.xml 是 ROS2包的“身份证 + 依赖清单 + 注册凭证”
+
+
+```bash
+gedit ~/xwg/turtle_ws/src/py_turtle_control/package.xml
+```
+<depend>rclpy</depend>                  <!-- import rclpy -->
+
+
+#### 在rclpy后新增三个接口依赖
+```xml
+<depend>geometry_msgs</depend>          <!-- Twist -->
+<depend>turtlesim</depend>              <!-- Pose -->
+<depend>turtle_interfaces</depend>      <!-- TurtleStatus -->
+```
+
+
+
+
+
 
 想强调就 **加粗**，想写代码就 `这样`。
 
