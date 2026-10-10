@@ -36,7 +36,7 @@ ros2 run turtlesim turtlesim_node
 ![ros2xwg35](/public/image/xwg_node/p1-1.png)
 
 
-### 现在顺便看一眼海龟有哪些话题（这一步很重要！！！）保持之前窗口运行，新开一个窗口 
+### 现在顺便看一眼海龟有哪些话题（这一步很重要！！）保持之前窗口运行，新开一个窗口 
 ```bash
 ros2 topic list
 ```
@@ -69,7 +69,7 @@ Vector3  linear float64 x float64 y float64 z （xyz方向线速度
 Vector3  angular float64 x float64 y float64 z （xyz方向加速度
 
 
-#### 2我们再看pose（使用pose,海龟会报出自己真实位置
+#### 2.我们再看pose（使用pose,海龟会报出自己真实位置
 
 
 看它的数据格式：
@@ -96,7 +96,7 @@ ros2 interface show turtlesim/msg/Pose
 float32 x float32 y（海龟在仿真窗口中的二维坐标位置（单位通常视为米）turtlesim默认窗口坐标大致是x:0~11.08，y:0~11.08。左下角为 (0,0)，右上角为最大值。
 
 
-theta（海龟的朝向角（偏航角），单位是弧度（rad）theta=0表示头朝正右方（X轴正向）。逆时针旋转为正，顺时针为负，范围通常在-π ~ π之间。
+theta(海龟的朝向角（偏航角），单位是弧度（rad）theta=0表示头朝正右方（X轴正向）。逆时针旋转为正，顺时针为负，范围通常在-π~π之间。
 
 
 float32 linear_velocity （线速度（前进/后退的速度），单位 m/s，正值表示向前游，负值表示向后退，如果静止则为 0.0。
@@ -178,6 +178,37 @@ ros2 pkg create cpp_status_listener --build-type ament_cmake --dependencies rclc
 确认目录下有三个包之后给接口包加一个msg目录：
 ```bash
 mkdir -p ~/xwg/turtle_ws/src/turtle_interfaces/msg
+```
+
+
+## 4.接口包下写自定义接口
+
+
+### 为什么要自定义？：​ 因为海龟自带的Pose只有位置和速度，没有"名字"。我们想让C++那边收到的消息更完整一点，就得自己造一个。
+
+
+```bash
+gedit ~/xwg/turtle_ws/src/turtle_interfaces/msg/TurtleStatus.msg
+```
+gedit概念：使用图形化文本编辑器，打开（如果不存在则自动创建）这个路径下的 TurtleStatus.msg 文件
+
+
+```msg
+# 海龟状态报告（我们自己定义的数据格式）
+# 规则：文件名首字母大写驼峰 + .msg；一行一个字段；# 是注释
+# 这个文件会被 rosidl 自动翻译成 Python 类和 C++ 头文件，
+# 所以 Python 和 C++ 能"说同一种语言"
+
+string turtle_name          # 海龟名字
+float64 x                   # x 坐标
+float64 y                   # y 坐标
+float64 theta               # 朝向
+float64 linear_speed        # 当前前进速度
+float64 angular_speed       # 当前转弯速度
+builtin_interfaces/Time stamp   # 时间戳
+#builtin_interfaces 是 ROS 2 官方提供的内置包，专门存放基础时间类型。
+#Time 是这个包里的一个标准消息，它本身只包含两个部分：int32 sec（秒）和 uint32 nanosec（纳秒），精度极高。
+#stamp：这是你定义的字段名称（变量名）。
 ```
 
 
