@@ -33,7 +33,7 @@ sudo apt install ros-humble-turtlesim -y
 ros2 run turtlesim turtlesim_node
 ```
 会弹出一个蓝底窗口，中间有只海龟。
-![ros2xwg35行](/public/image/xwg_node/p1-1.png)
+![ros2xwg35](/public/image/xwg_node/p1-1.png)
 
 
 ### 现在顺便看一眼海龟有哪些话题（这一步很重要！！！）保持之前窗口运行，新开一个窗口 
@@ -48,7 +48,7 @@ ros2 topic list
 ```bash
 ros2 topic info /turtle1/cmd_vel -v
 ```
-![ros2xwg49行](public/image/xwg_node/p2-1.png)
+![ros2xwg49行](/public/image/xwg_node/p2-1.png)
 
 
 滑到第一行Type会显示：Type: geometry_msgs/msg/Twist （Twist是我们写代码要import的类型
@@ -60,7 +60,7 @@ ros2 interface show geometry_msgs/msg/Twist
 ```
 
 
-![ros2xwg62行](public/image/xwg_node/p2-2.png)
+![ros2xwg62行](/public/image/xwg_node/p2-2.png)
 
 
 Vector3  linear float64 x float64 y float64 z （xyz方向线速度
@@ -78,7 +78,7 @@ ros2 topic info /turtle1/pose -v
 ```
 
 
-![ros2xwg81](public/image/xwg_node/p2-3.png)
+![ros2xwg81](/public/image/xwg_node/p2-3.png)
 
 
 滑到前面Type会显示：Topic type: turtlesim/msg/Pose （Pose是我们写代码要import的类型
@@ -90,7 +90,7 @@ ros2 interface show turtlesim/msg/Pose
 ```
 
 
-![ros2xwg93](public/image/xwg_node/p2-4.png)
+![ros2xwg93](/public/image/xwg_node/p2-4.png)
 
 
 float32 x float32 y float32 （海龟在仿真窗口中的二维坐标位置（单位通常视为米）turtlesim 默认窗口坐标大致是 x: 0~11.08，y: 0~11.08。左下角为 (0,0)，右上角为最大值。
