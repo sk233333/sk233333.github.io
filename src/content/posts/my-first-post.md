@@ -129,11 +129,11 @@ cd ~/xwg/turtle_ws/src
 
 1.ament_cmake C++ / 接口包 
 
-    
-2. ament_python Python
+
+2.ament_python Python
 
     
-3. cmake 纯 CMake（不推荐,一般非ros项目使用）
+3.cmake 纯 CMake（不推荐,一般非ros项目使用）
 
 
 #### 4.开源许可证
@@ -172,7 +172,7 @@ ros2 pkg create cpp_status_listener --build-type ament_cmake --dependencies rclc
 ```
 	
 
-![ros2xwg175](public/image/xwg_node/p3-1.png)
+![ros2xwg175](/public/image/xwg_node/p3-1.png)
 
 
 确认目录下有三个包之后给接口包加一个msg目录：
