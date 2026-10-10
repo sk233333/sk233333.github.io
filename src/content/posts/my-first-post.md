@@ -110,7 +110,7 @@ float32 angular_velocity （角速度（原地旋转的速度），单位 rad/s�
 
 建立项目文件夹,并进入src终端
 ```bash
-mkdir -p ~/xhg/turtle_ws/src
+mkdir -p ~/xwg/turtle_ws/src
 cd ~/xwg/turtle_ws/src
 ```
 
