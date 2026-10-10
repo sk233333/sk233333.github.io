@@ -1,4 +1,4 @@
-<img width="1460" height="639" alt="image" src="https://github.com/user-attachments/assets/0377414e-3397-45cd-a02f-2953bdd6736a" />---
+---
 title: "ROS2 节点+服务项目-小乌龟转圈详细解读"
 published: 2026-10-09
 description: "用大量的注释带你了解这个项目背后可以学到什么"
