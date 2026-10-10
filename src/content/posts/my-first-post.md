@@ -269,6 +269,7 @@ DEPENDENCIES builtin_interfaces 保证编译顺序
 ament_export_dependencies(rosidl_default_runtime) 导出运行时依赖给下游
 
 
+### 完整的CMakeLists.txt文本：
 ```txt
 cmake_minimum_required(VERSION 3.8)
 project(turtle_interfaces)
@@ -320,6 +321,7 @@ XML 第二行 <?xml-model...?>: 原文件自带的 XSD 校验头，新文件移�
 缺失的接口组与运行时​:原文件完全没有声明接口包身份和运行时依赖（这正是本次要补上的）。
 
 
+### 完整的package.xml代码：
 ```xml
 <?xml version="1.0"?>
 <package format="3">
@@ -403,7 +405,7 @@ package.xml 要声明依赖是给 ROS2包管理器看的，CMakeLists.txt是给�
 
 创建内层包：
 ```bash
-cd ~/turtle_ws/src/py_turtle_control
+cd ~/xwg/turtle_ws/src/py_turtle_control
 mkdir py_turtle_control
 touch py_turtle_control/__init__.py
 gedit py_turtle_control/turtle_circle.py
@@ -469,6 +471,7 @@ packages=['py_turtle_control'] 会找不到同名子目录，编译可能报警�
 但是！在 ROS 2 里千万别这么干：ROS 工具链（如资源索引、launch 文件查找）高度依赖“目录名 == 包名”的约定，强行改映射会导致 ros2 pkg list 异常或编译警告，属于自找麻烦。
 
 
+### 完整的python内层包代码：
 ```python
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
@@ -616,7 +619,7 @@ if __name__ == '__main__':
 保证只有直接运行这个文件时才启动节点。ros2 run 的机制是"导入这个模块并调用它的 main()"，没有这行的话，导入时就会自动启动一个节点，出现"莫名多出一个节点"的诡异现象。
 
 
-## 修改python发布者包文件(py_turtle_control
+## 7.修改python发布者包文件(py_turtle_control
 
 
 ### 修改setup.py
@@ -640,6 +643,7 @@ if __name__ == '__main__':
 上面修改了更好，只把turtle_circle = py_turtle_control.turtle_circle:main'加上也可以运行 
 
 
+### 完整的setup.py代码：
 ```python
 from setuptools import setup
 #setup() 是 Python官方打包工具 setuptools 的核心函数，ROS2的colcon build底层就是在调用它
@@ -705,27 +709,337 @@ gedit ~/xwg/turtle_ws/src/py_turtle_control/package.xml
 ```
 
 
+#### 完整的package.xml代码：
+```xml
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>py_turtle_control</name>
+  <version>0.0.0</version>
+  <description>TODO: Package description</description>
+  <maintainer email="17720980510@163.com">wxx</maintainer>
+  <license>Apache-2.0</license>
+
+  <depend>rclpy</depend>
+  <depend>geometry_msgs</depend>
+  <depend>turtlesim</depend>
+  <depend>turtle_interfaces</depend>
+
+  <test_depend>ament_copyright</test_depend>
+  <test_depend>ament_flake8</test_depend>
+  <test_depend>ament_pep257</test_depend>
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>
+```
+
+
+## 8.我们先修改C++订阅者包文件(cpp_status_listener
+
+
+### 1.修改CMakeLists.txt
+
+
+新增消息包依赖,增加了 find_package(turtle_interfaces REQUIRED)(我们自定义的那个接口
+
+
+移除测试与代码检查（lint）块，删除了图2中 if(BUILD_TESTING) 到 ament_lint_auto_find_test_dependencies() 的整段代码，这是 ros2 pkg create 自动生成的默认测试/版权检查逻辑
+
+
+#### CMakeLists.txt文本内容如下：
+```txt
+cmake_minimum_required(VERSION 3.8)
+#告诉 CMake至少需要 3.8 版本才能正确解析这个 CMakeLists.txt
+
+project(cpp_status_listener)
+#工程名定义，必须和 package.xml 里的 <name> 一致
+
+#编译器警告选项，if条件检测当前编译器是不是 GCC或 Clang（Linux下基本都是）,不影响编译成功与否，但帮你抓 bug​
+if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+  add_compile_options(-Wall -Wextra -Wpedantic)
+  #Wall-打开所有常用警告（没初始化变量、未使用变量等）
+  #Wextra-额外警告（空循环体、签名不匹配等）
+  #Wpedantic-严格遵循 C++ 标准，拒绝非标准扩展
+endif()
+
+find_package(ament_cmake REQUIRED)
+find_package(rclcpp REQUIRED)                # rclcpp/rclcpp.hpp
+find_package(turtle_interfaces REQUIRED)     # 自定义消息头文件
+#find_package()告诉 CMake：去系统里找这些 ROS2包，找到它们的头文件路径、库文件路径、编译选项
+#REQUIRED找不到就报错
+#ament_cmake ROS 2 C++ 构建系统基础,不直接 include，但必须有
+#rclcppC++客户端库, 对应：#include "rclcpp/rclcpp.hpp"
+#turtle_interfaces，自定义消息 TurtleStatus对应：#include "turtle_interfaces/msg/turtle_status.hpp"
+
+add_executable(status_listener src/status_listener.cpp)
+#add_executable是 CMake的内置命令，作用是"声明把哪些.cpp文件编成一个可执行程序
+# 把.cpp编译成可执行文件（第一个参数就是ros2 run的命令名，后面是原代码路径）
+
+ament_target_dependencies(status_listener rclcpp turtle_interfaces)
+#ament_target_dependencies(目标名 包1 包2 ...)= 把已经 find_package找到的 ROS2包，一键把头文件+库+传递依赖，挂到我的节点上,自动帮你递归展开所有传递依赖
+
+install(TARGETS status_listener DESTINATION lib/${PROJECT_NAME})
+#TARGETS status_listener 安装上面 add_executable 生成的可执行文件
+#DESTINATION lib/${PROJECT_NAME} 安装到 install/cpp_status_listener/lib/cpp_status_listener/
+
+ament_package()
+#结束声明
+```
+
+
+### 2.在package.xml下声明依赖
+
+
+在<depend>rclcpp</depend>后面加一行：
+```xml
+<depend>turtle_interfaces</depend>
+```
+
+
+#### 完整的package.xml代码如下：
+```xml
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>cpp_status_listener</name>
+  <version>0.0.0</version>
+  <description>TODO: Package description</description>
+  <maintainer email="17720980510@163.com">wxx</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <depend>rclcpp</depend>
+  <depend>turtle_interfaces</depend>
+
+  <test_depend>ament_lint_auto</test_depend>
+  <test_depend>ament_lint_common</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>
+```
 
 
 
 
-想强调就 **加粗**，想写代码就 `这样`。
+## 9.写C++ 订阅节点（包3，只做一件事：收数据）
 
 ```bash
-gedit ~/xwg/turtle_ws/src/turtle_interfaces/msg/TurtleStatus.msg
-```
-## 小标题二
-
-- 列表项
-- 列表项
-
-```js
-console.log("这段代码会带高亮、行号和复制按钮");
+gedit ~/xwg/turtle_ws/src/cpp_status_listener/src/status_listener.cpp
 ```
 
-> [!NOTE]
-> 这是个提示框，也支持 [!TIP] [!WARNING] [!IMPORTANT]
 
-## 小标题三
+### 完整的status_listener.cpp代码如下：
+```cpp
+// =====================================================================
+// 节点：status_listener —— C++ 编写的【订阅者】
+// 只干一件事：收听 /turtle_status，把收到的内容打印出来。
+//
+// 它收到的消息是 Python 节点发来的，而消息格式由 .msg 文件定义，
+// 所以 Python 和 C++ 虽然语言不同，却能无缝对话 —— 这就是 ROS2 的魅力。
+//
+// C++ 订阅者套路（4 步）：
+//   第1步 继承 rclcpp::Node
+//   第2步 create_subscription<消息类型>("话题名", 队列长度, 回调)
+//   第3步 写回调函数
+//   第4步 main 里 rclcpp::spin(节点)
+// =====================================================================
 
-结尾。
+#include <memory>                 // std::make_shared 智能指针
+#include <string>                 // std::string
+#include "rclcpp/rclcpp.hpp"      // ROS2 的 C++ 库，等于 Python 里的 rclpy
+                                  // msg/TurtleStatus.msg → "包名/msg/turtle_status.hpp"
+#include "turtle_interfaces/msg/turtle_status.hpp"
+
+using std::placeholders::_1;   
+//C++ 标准库早就定义了 std::placeholders::_1
+//后面你写 _1，编译器自动替换成全名，_1 就是 std::bind 的"占位坑"，标记"调用者传的第一个参数放这里"。
+//它不存数据、不运行、不阻塞，纯粹是绑定阶段的标记。消息到了，ROS2往_1那个坑里一塞，你的回调就拿到了msg。
+
+// 【第1步】继承 rclcpp::Node
+class StatusListener : public rclcpp::Node
+{
+public:
+  StatusListener()
+  : Node("status_listener")       // 节点名，不能和 Python 节点重名
+  {
+    // 参数：每收到几条打印一次（防止刷屏）
+    this->declare_parameter<int>("print_every", 30);
+    print_every_ = this->get_parameter("print_every").as_int();
+    // print_every_在private里定义了，默认值是30，用户可以在启动节点时通过参数覆盖它。
+    //as_int()是ROS2里rclcpp::Parameter类的一个成员函数，专门用来把参数值转成int类型
+
+    // 【第2步】创建订阅者
+    // 注意：C++ 的成员函数不能直接当回调，必须用 std::bind 包一层：
+    //   std::bind(&类名::函数名, this, _1)
+    //   _1 是占位符，表示"将来收到的那条消息"
+    subscription_ = this->create_subscription<turtle_interfaces::msg::TurtleStatus>(
+      "/turtle_status", 10,
+      std::bind(&StatusListener::status_callback, this, _1));
+      //python版订阅：self.subscription = self.create_subscription(
+      //  TurtleStatus,turtle_status',self.status_callback,10 )
+
+    RCLCPP_INFO(this->get_logger(), "C++ 订阅者已启动，正在收听 /turtle_status ...");
+  }
+  //这行是 ROS 2 的日志输出（打日志），相当于你 Python 里的 self.get_logger().info(...)
+
+private:
+  // 【第3步】回调函数：每收到一条消息，ROS2 自动调用一次
+  // ::SharedPtr 是 ROS2 推荐写法（智能指针，自动管内存，不用手动 delete）
+  //msg和python里pose接口那说过的一样，这个msg是接收到的消息，不是自己创建的
+  void status_callback(const turtle_interfaces::msg::TurtleStatus::SharedPtr msg)
+  {
+    count_++;
+
+    // 每 print_every_ 条打印一次，避免刷屏
+    if (count_ % print_every_ != 0) {
+      return;
+    }
+
+    // %s 对应字符串，%.2f 对应保留两位小数的浮点数
+    // C++ 的 std::string 传给 %s 必须加 .c_str()
+    // %d 对应整数，%09u 表示不足 9 位前面补 0（纳秒是 9 位数）
+    RCLCPP_INFO(this->get_logger(),
+      "[C++收到 #%d] %s | 时间 %d.%09u | 位置 x=%.2f y=%.2f 朝向=%.2f | 速度 前=%.2f 转=%.2f",
+      count_, msg->turtle_name.c_str(),
+      msg->stamp.sec, msg->stamp.nanosec,
+      msg->x, msg->y, msg->theta,
+      msg->linear_speed, msg->angular_speed);
+  }
+  // ===== 成员变量 =====
+  rclcpp::Subscription<turtle_interfaces::msg::TurtleStatus>::SharedPtr subscription_;
+  //rclcpp::Subscription是ROS2里订阅者的类模板，<>里是消息类型
+  //turtle_interfaces::msg::TurtleStatus=turtle_interfaces包的msg子空间里的TurtleStatus类
+  //SharedPtr 是智能指针，自动管内存，不用手动 delete。
+
+  int count_ = 0;          // 收到多少条
+  int print_every_ = 30;   // 每几条打印一次
+};
+
+// 【第4步】main 函数
+int main(int argc, char ** argv)
+{
+  rclcpp::init(argc, argv);                          // 1) 初始化 ROS2
+  auto node = std::make_shared<StatusListener>();    // 2) 创建节点
+  rclcpp::spin(node);                                // 3) 持续运转，等待消息
+  rclcpp::shutdown();                                // 4) Ctrl+C 后收尾
+  return 0;
+}
+```
+### C++ 代码里几个必须讲清的点
+
+
+1.头文件名怎么来的？
+
+
+msg/TurtleStatus.msg → #include "包名/msg/turtle_status.hpp"，文件名全小写 + 下划线 + .hpp。这是死规则，TurtleStatus 会变成 turtle_status。
+
+
+2.为什么回调要 std::bind？
+
+
+Python 里 self.pose_callback 直接传就行；C++ 里成员函数隐含一个 this 参数，不能直接当函数指针，必须用 std::bind(&类::函数, this, _1) 把它"绑成"普通函数。_1 表示将来收到的那条消息。
+
+
+3.为什么用 ::SharedPtr？
+
+
+ROS2 推荐用智能指针接收消息，自动管理内存，不用 delete。写成 const XXX::SharedPtr msg 是标准姿势。
+
+
+4..c_str() 为什么必须有？
+
+
+RCLCPP_INFO 底层是 C 语言的 printf，%s 只认 C 风格字符串。std::string 必须 .c_str() 转换，否则打印出乱码。
+
+
+5.rclcpp::spin(node) 的作用
+
+
+和 Python 的 rclpy.spin(node) 完全一样——让节点活着并持续响应。没有它，程序 main 跑完就退出，一条都收不到。
+
+
+
+
+## 10.编译项目
+```bash
+cd ~/xwg/turtle_ws
+source /opt/ros/humble/setup.bash
+colcon build
+```
+看到 Summary: 3 packages finished 就成功了!
+
+
+```bash
+source ~/xwg/turtle_ws/install/setup.bash
+ros2 interface show turtle_interfaces/msg/TurtleStatus
+```
+能看到7个字段，说明自定义接口这一步你已经掌握了。
+
+
+
+## 11.运行（三个终端）
+
+
+### 终端 1 —— 启动海龟模拟器：
+```bash
+cd ~/xwg/turtle_ws
+source /opt/ros/humble/setup.bash
+ros2 run turtlesim turtlesim_node
+```
+
+
+### 终端 2 —— 启动 Python 节点：
+```bash
+source /opt/ros/humble/setup.bash
+source ~/xwg/turtle_ws/install/setup.bash
+ros2 run py_turtle_control turtle_circle
+```
+这时海龟开始转圈，终端每 30 条打一次"已转发状态"。
+
+
+### 终端 3 —— 启动 C++ 订阅者：
+```bash
+source /opt/ros/humble/setup.bash
+source ~/xwg/turtle_ws/install/setup.bash
+ros2 run cpp_status_listener status_listener
+```
+会看到 [C++收到 #30] turtle1 | 位置 x=... y=...。 
+
+
+### Python发、C++收，跨语言通信这就跑通了。
+
+
+### 改参数玩一玩（不用改代码）
+
+
+画大一点的圆：减小转弯速度
+```bash
+ros2 run py_turtle_control turtle_circle --ros-args -p angular_speed:=0.3
+```
+
+
+画小一点的圆：加大转弯速度
+```bash
+ros2 run py_turtle_control turtle_circle --ros-args -p angular_speed:=2.5
+```
+
+
+让它跑快点
+```bash
+ros2 run py_turtle_control turtle_circle --ros-args -p linear_speed:=3.0
+```
+
+
+C++ 那边改成每 5 条打印一次
+```bash
+ros2 run cpp_status_listener status_listener --ros-args -p print_every:=5
+```
+
+
+## 以上就是整个项目的全过程
