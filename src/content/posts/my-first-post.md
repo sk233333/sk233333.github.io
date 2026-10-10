@@ -127,28 +127,28 @@ cd ~/xwg/turtle_ws/src
 #### 3.构建系统类型(就是问包要用什么语言写的：分为三类
 
 
-		1.ament_cmake C++ / 接口包 
+1.ament_cmake C++ / 接口包 
 
     
-		2. ament_python Python
+2. ament_python Python
 
     
-		3. cmake 纯 CMake（不推荐,一般非ros项目使用）
+3. cmake 纯 CMake（不推荐,一般非ros项目使用）
 
 
 #### 4.开源许可证
 
 
-		指定开源许可证，会写入 package.xml
+指定开源许可证，会写入 package.xml
 
     
-		常见选项：1. Apache-2.0（商业友好） 2. MIT（最宽松） 3. BSD-3-Clause 4. GPL-3.0（传染性开源）
+常见选项：1. Apache-2.0（商业友好） 2. MIT（最宽松） 3. BSD-3-Clause 4. GPL-3.0（传染性开源）
 
     
-		为什么要写这个：ROS 2 生态非常强调许可证
+为什么要写这个：ROS 2 生态非常强调许可证
 
     
-		为什么要加license?: 1. 很多公司/高校项目 强制要求明确 license 2. 不写 license 默认是“保留所有权利”，别人不能合法使用。
+为什么要加license?: 1. 很多公司/高校项目 强制要求明确 license 2. 不写 license 默认是“保留所有权利”，别人不能合法使用。
 
 
 #### 了解完格式之后我们来建立包
@@ -171,6 +171,9 @@ ros2 pkg create py_turtle_control --build-type ament_python --dependencies rclpy
 ros2 pkg create cpp_status_listener --build-type ament_cmake --dependencies rclcpp --license Apache-2.0
 ```
 	
+
+![ros2xwg175]()
+
 
 确认目录下有三个包之后给接口包加一个msg目录：
 ```bash
