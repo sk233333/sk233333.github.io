@@ -2,7 +2,7 @@
 title: "ROS2 节点+服务项目-小乌龟转圈详细解读"
 published: 2026-10-09
 description: "用大量的注释带你了解这个项目背后可以学到什么"
-image: ""
+image: "/image/xwg_node/p0.png"
 category: "ROS2学习日常"
 draft: false
 tags: [ROS2, PYTHON, C++, 节点, 服务, 小乌龟]
@@ -1053,7 +1053,7 @@ ros2 run py_turtle_control turtle_circle --ros-args -p linear_speed:=-2.0 -p ang
 ![ros2xwg1053](/image/xwg_node/p11-1.png)
 
 
-#### 龟呢？，执行最后一个直线后退命令飞出去了。
+#### 龟呢？，执行最后一个直线后退命令飞到角落去了。
 
 
 #### 1.改订阅者端
