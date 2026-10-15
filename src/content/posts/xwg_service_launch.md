@@ -59,19 +59,23 @@ tags: [ROS2, PYTHON, C++, 服务, TF, 小乌龟, 四元数, RViz2]
   
 - **C++**：`patrol_client`（客户端，产生随机点、请求服务、等待结果）
 
-- 
+
 - **TF 广播**：`tf_broadcaster`（订阅两只海龟的 pose，广播成坐标系）
 
 
 ## 3. 第一步：定义服务接口
 
+
 ### 3.1 创建 .srv 文件
+
 
 ```bash
 mkdir -p ~/xwg/turtle_ws/src/turtle_interfaces/srv
 gedit ~/xwg/turtle_ws/src/turtle_interfaces/srv/Patrol.srv
 ```
 
+
+#### 以下是srv内具体内容：
 ```srv
 # ============================================
 # 巡逻服务接口
@@ -89,10 +93,11 @@ bool success            # 是否成功接受
 string message         # 文字说明
 ```
 
+
 ### 3.2 更新 turtle_interfaces/CMakeLists.txt
 
-在 `rosidl_generate_interfaces` 里加上 srv 那一行（**最容易漏**）：
 
+在 `rosidl_generate_interfaces` 里加上 srv 那一行（**最容易漏**）：
 ```cmake
 rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/TurtleStatus.msg"
@@ -101,8 +106,8 @@ rosidl_generate_interfaces(${PROJECT_NAME}
 )
 ```
 
-`package.xml` 不用改（依赖没变）。
 
+`package.xml` 不用改（依赖没变）。
 > 为什么必须登记？因为 `.srv` 也要被 rosidl 翻译成 Python 类和 C++ 头文件。
 > 不登记的话，C++ 编译时会报 `patrol.hpp: No such file`。
 
@@ -114,6 +119,8 @@ rosidl_generate_interfaces(${PROJECT_NAME}
 gedit ~/xwg/turtle_ws/src/py_turtle_control/py_turtle_control/spawn_turtle.py
 ```
 
+
+#### 以下是创建第二只小海龟的代码：
 ```python
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
@@ -187,6 +194,7 @@ def main(args=None):
 if __name__ == '__main__':
     main()
 ```
+
 
 ### 4.1 关键概念讲解
 
