@@ -29,11 +29,101 @@ tags: [ROS2, PYTHON, C++, 服务, TF, 小乌龟]
 
 
 
+<style>
+/* 正文段落首行缩进两字符，这就是"空两格"的正确做法 */
+.indent p {
+text-indent: 2em;
+margin: 0.6em 0;
+}
+/* 代码块窗口标题条 */
+.code-title {
+background: #1e1e1e;
+color: #9ca3af;
+font-size: 0.85em;
+padding: 6px 14px;
+border-radius: 8px 8px 0 0;
+font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+border-bottom: 1px solid #333;
+}
+.code-title + pre {
+margin-top: 0;
+border-radius: 0 0 8px 8px;
+}
+</style>
+<div class="indent">
+本篇接上一个话题项目。上一篇里 turtle1 一直在转圈，所有数据都是"发完就不管"的广播。
+这一篇要做两件事：
 
-## 1. 第一步：定义服务接口
+    用服务（Service）​ 让第二只海龟 turtle2 按随机目标点巡逻——客户端需要知道"到了没有"。
+    用 TF（坐标变换）​ 让 RViz2 里实时看到两只海龟各自的坐标系跟着动。
 
+    说明：本篇不采用 rosbag 回放方案。因为 turtle2 是 spawn 服务创建的，
+    服务调用不会被记录进 bag，回放时只能看到 turtle1。所以本项目以"实时运行 + TF 可视化"为主。
 
-### 1 创建 .srv 文件
+1. 为什么"巡逻到某个点"必须用服务
+ROS2 里有两种最常用的通信方式，先搞清区别，后面所有代码都顺理成章。
+对比项
+	
+话题 Topic（上一篇）
+	
+服务 Service（本篇）
+通信模式
+	
+广播，发完就不管
+	
+一问一答，必须等回应
+方向
+	
+单向
+	
+双向（请求 + 响应）
+是否阻塞
+	
+否
+	
+是（客户端等服务端处理完）
+典型场景
+	
+持续数据流（位置、速度、图像）
+	
+一次性任务（拍照、开关、导航到某点）
+为什么"巡逻到某个点"适合用服务？
+因为客户端需要知道"到了没有"。话题是单向广播，回不来；
+服务是问答，服务端能明确告诉你 success: true。
+对应到本篇的三步设计：
+
+    动态接收服务​ —— 服务端随时待命，客户端什么时候请求都行。
+    自定义接口​ —— 没有现成的"巡逻"服务，自己写一个 .srv。
+    客户端产生随机点并请求​ —— C++ 节点随机生成坐标，调用服务让海龟走过去。
+
+2. 整体架构
+
+[turtlesim]
+                   ↗            ↖
+        /spawn（服务）            /turtle2/pose（话题）
+             │                        │
+   [spawn_turtle.py]          [patrol_server.py] ──发──> /turtle2/cmd_vel
+   创建 turtle2                （Python 服务端）               │
+                                    ↑                        └─> 海龟移动
+                                    │                            │
+                          /patrol（自定义服务）                   │
+                                    │                       （闭环控制）
+                          [patrol_client.cpp]                   │
+                           （C++ 客户端）                        │
+                           产生随机点 ──请求──> 服务端            │
+                           等待响应 <─────────┘                 │
+                                                              │
+                              到达后通过 /turtle_status 通知 ────┘
+
+分工：
+
+    Python：spawn_turtle（创建海龟）+ patrol_server（服务端，闭环控制海龟走路）
+    C++：patrol_client（客户端，产生随机点、请求服务、等待结果）
+    TF 广播：tf_broadcaster（订阅两只海龟的 pose，广播成坐标系）
+
+3. 第一步：定义服务接口
+3.1 创建 .srv 文件
+<div class="code-title">终端 1</div>
 
 mkdir -p ~/xwg/turtle_ws/src/turtle_interfaces/srv
 gedit ~/xwg/turtle_ws/src/turtle_interfaces/srv/Patrol.srv
@@ -55,6 +145,7 @@ string message         # 文字说明
 
 3.2 更新 turtle_interfaces/CMakeLists.txt
 在 rosidl_generate_interfaces 里加上 srv 那一行（最容易漏）：
+<div class="code-title">CMakeLists.txt</div>
 
 rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/TurtleStatus.msg"
@@ -68,8 +159,7 @@ package.xml 不用改（依赖没变）。
     不登记的话，C++ 编译时会报 patrol.hpp: No such file。
 
 4. 第二步：创建第二只海龟（Python 客户端调用 /spawn）
-
-gedit ~/xwg/turtle_ws/src/py_turtle_control/py_turtle_control/spawn_turtle.py
+<div class="code-title">src/py_turtle_control/py_turtle_control/spawn_turtle.py</div>
 
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
@@ -174,8 +264,7 @@ rclpy.spin_once(node)
     异步 + spin_once 循环是 ROS2 推荐的客户端写法。
 
 5. 第三步：巡逻服务端（Python，闭环控制海龟走路）
-
-gedit ~/xwg/turtle_ws/src/py_turtle_control/py_turtle_control/patrol_server.py
+<div class="code-title">src/py_turtle_control/py_turtle_control/patrol_server.py</div>
 
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
@@ -312,7 +401,7 @@ class PatrolServer(Node):
             status.y = msg.y
             status.theta = msg.theta
             status.linear_speed = cmd.linear.x
-            status.angular_speed = cmd.angular.z
+            status.angular_speed = cmd.angular_speed
             status.stamp = self.get_clock().now().to_msg()
             self.status_pub_.publish(status)
             self.get_logger().info(
@@ -356,8 +445,7 @@ cmd_pub.publish(cmd)             # ④ 发布控制，回到①
 
 这就是"收反馈 → 算误差 → 发指令"的完整回路，PID、导航、机械臂全是它的加强版。
 6. 第四步：C++ 客户端（产生随机点、请求服务）
-
-gedit ~/xwg/turtle_ws/src/cpp_status_listener/src/patrol_client.cpp
+<div class="code-title">src/cpp_status_listener/src/patrol_client.cpp</div>
 
 // =====================================================================
 // 节点：patrol_client —— C++ 编写的【客户端】
@@ -531,8 +619,7 @@ q.z = sin(half)
 q.w = cos(half)
 
 7.2 tf_broadcaster.py
-
-gedit ~/xwg/turtle_ws/src/py_turtle_control/py_turtle_control/tf_broadcaster.py
+<div class="code-title">src/py_turtle_control/py_turtle_control/tf_broadcaster.py</div>
 
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
@@ -631,9 +718,7 @@ sensor_qos = QoSProfile(
 
 8. 第六步：launch 一键拉起
 8.1 turtles_patrol.launch.py
-
-mkdir -p ~/xwg/turtle_ws/src/py_turtle_control/launch
-gedit ~/xwg/turtle_ws/src/py_turtle_control/launch/turtles_patrol.launch.py
+<div class="code-title">src/py_turtle_control/launch/turtles_patrol.launch.py</div>
 
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
@@ -731,6 +816,7 @@ ament_target_dependencies(patrol_client rclcpp turtle_interfaces)
 install(TARGETS patrol_client DESTINATION lib/${PROJECT_NAME})
 
 9. 编译
+<div class="code-title">终端 1</div>
 
 cd ~/xwg/turtle_ws
 source /opt/ros/humble/setup.bash
@@ -770,9 +856,9 @@ rviz2
     左侧 Global Options → Fixed Frame​ 改成 world
     左下角 Add → TF → OK
     TF 设置里勾选：
-      Show Axes（看红绿蓝三根轴）
-      Show Names（看名字）
-      Show Arrows（看父子连线）
+        ✅ Show Axes（看红绿蓝三根轴）
+        ✅ Show Names（看名字）
+        ✅ Show Arrows（看父子连线）
         Marker Scale = 1
 
 效果：两只海龟各自带一个坐标轴，turtle2 移动时它的轴会平移 + 旋转跟着动。
@@ -817,6 +903,7 @@ ros2 run tf2_tools view_frames       # 把 TF 树导出成 frames.pdf
 
 13. 回头看：话题 vs 服务，到底怎么选
 做完这两个项目，你应该有体感了：
+
     turtle1 转圈​ → 用话题。速度指令是持续流，谁爱听谁听，不需要回应。
     turtle2 巡逻​ → 用服务。"去 (8, 8)" 是一个任务，客户端必须知道"到了没有"。
 
@@ -825,3 +912,11 @@ ros2 run tf2_tools view_frames       # 把 TF 树导出成 frames.pdf
     持续的数据用话题，一次性的任务用服务。
 
 而 TF​ 是这两者的"空间层"——它不负责传业务数据，
+只负责回答一个问题："某个坐标系，此刻在世界里的哪个位置、什么朝向？"
+14. 下一步可以做什么
+
+    把 Action​ 加进来：巡逻这种"长时间任务"其实更适合 Action（自带取消 + 进度反馈）。
+    给 launch 加条件参数：ros2 launch ... interval:=5 动态改巡逻间隔。
+    用 tf2_geometry_msgs 做坐标变换计算：比如算两只海龟之间的距离。
+
+</div>
