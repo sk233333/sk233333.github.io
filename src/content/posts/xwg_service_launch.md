@@ -1,133 +1,73 @@
 ---
-title: "ROS2 服务+工具项目-小乌龟随机巡逻详细解读"
+title: "ROS2 服务+TF 项目-小乌龟随机巡逻与坐标系可视化详解"
 published: 2026-10-15
-description: "用大量的注释带你了解这个项目背后可以学到什么"
-image: "/image/xwg_node/p20-1.jpg"
+description: "在上一个话题项目基础上，引入 ROS2 第二种通信方式：服务（Service），并让 RViz2 实时看到两只海龟的坐标系"
+image: "/image/xwg_srv/p0.png"
 category: "ROS2学习日常"
 draft: false
-tags: [ROS2, PYTHON, C++, 服务, TF, 小乌龟]
+tags: [ROS2, PYTHON, C++, 服务, TF, 小乌龟, 四元数, RViz2]
 ---
-# 这个是github同款开源小项目解读 [xwg_project13](https://github.com/sk233333/xwg_project)
 
 
-## 本篇接上一个话题项目。上一篇里 turtle1 一直在转圈，所有数据都是"发完就不管"的广播。
+# ROS2 服务+TF 项目-小乌龟随机巡逻与坐标系可视化详解
+
+
+##  本篇接上一个话题项目。上一篇里 turtle1 一直在转圈，所有数据都是"发完就不管"的广播。
 
 
 ## 这一篇要做两件事：
 
 
-### 用服务（Service）​ 让第二只海龟 turtle2 按随机目标点巡逻——客户端需要知道"到了没有"。
-
-    
-### 用 TF（坐标变换）​ 让 RViz2 里实时看到两只海龟各自的坐标系跟着动。
+### 1. **用服务（Service）** 让第二只海龟 turtle2 按随机目标点巡逻——客户端需要知道"到了没有"。
 
 
-### 说明：本篇不采用 rosbag 回放方案。因为 turtle2 是 spawn 服务创建的，
+### 2. **用 TF（坐标变换）** 让 RViz2 里实时看到两只海龟各自的坐标系跟着动。
 
 
-### 服务调用不会被记录进 bag，回放时只能看到 turtle1。所以本项目以"实时运行 + TF 可视化"为主。
+## 1. 为什么"巡逻到某个点"必须用服务
 
 
-
-<style>
-/* 正文段落首行缩进两字符，这就是"空两格"的正确做法 */
-.indent p {
-text-indent: 2em;
-margin: 0.6em 0;
-}
-/* 代码块窗口标题条 */
-.code-title {
-background: #1e1e1e;
-color: #9ca3af;
-font-size: 0.85em;
-padding: 6px 14px;
-border-radius: 8px 8px 0 0;
-font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-border-bottom: 1px solid #333;
-}
-.code-title + pre {
-margin-top: 0;
-border-radius: 0 0 8px 8px;
-}
-</style>
-<div class="indent">
-本篇接上一个话题项目。上一篇里 turtle1 一直在转圈，所有数据都是"发完就不管"的广播。
-这一篇要做两件事：
-
-    用服务（Service）​ 让第二只海龟 turtle2 按随机目标点巡逻——客户端需要知道"到了没有"。
-    用 TF（坐标变换）​ 让 RViz2 里实时看到两只海龟各自的坐标系跟着动。
-
-    说明：本篇不采用 rosbag 回放方案。因为 turtle2 是 spawn 服务创建的，
-    服务调用不会被记录进 bag，回放时只能看到 turtle1。所以本项目以"实时运行 + TF 可视化"为主。
-
-1. 为什么"巡逻到某个点"必须用服务
-ROS2 里有两种最常用的通信方式，先搞清区别，后面所有代码都顺理成章。
-对比项
-	
-话题 Topic（上一篇）
-	
-服务 Service（本篇）
-通信模式
-	
-广播，发完就不管
-	
-一问一答，必须等回应
-方向
-	
-单向
-	
-双向（请求 + 响应）
-是否阻塞
-	
-否
-	
-是（客户端等服务端处理完）
-典型场景
-	
-持续数据流（位置、速度、图像）
-	
-一次性任务（拍照、开关、导航到某点）
 为什么"巡逻到某个点"适合用服务？
-因为客户端需要知道"到了没有"。话题是单向广播，回不来；
-服务是问答，服务端能明确告诉你 success: true。
+
+
+因为**客户端需要知道"到了没有"**。话题是单向广播，回不来；
+
+
+服务是问答，服务端能明确告诉你 `success: true`。
+
 对应到本篇的三步设计：
 
-    动态接收服务​ —— 服务端随时待命，客户端什么时候请求都行。
-    自定义接口​ —— 没有现成的"巡逻"服务，自己写一个 .srv。
-    客户端产生随机点并请求​ —— C++ 节点随机生成坐标，调用服务让海龟走过去。
+1. **动态接收服务** —— 服务端随时待命，客户端什么时候请求都行。
 
-2. 整体架构
 
-[turtlesim]
-                   ↗            ↖
-        /spawn（服务）            /turtle2/pose（话题）
-             │                        │
-   [spawn_turtle.py]          [patrol_server.py] ──发──> /turtle2/cmd_vel
-   创建 turtle2                （Python 服务端）               │
-                                    ↑                        └─> 海龟移动
-                                    │                            │
-                          /patrol（自定义服务）                   │
-                                    │                       （闭环控制）
-                          [patrol_client.cpp]                   │
-                           （C++ 客户端）                        │
-                           产生随机点 ──请求──> 服务端            │
-                           等待响应 <─────────┘                 │
-                                                              │
-                              到达后通过 /turtle_status 通知 ────┘
+2. **自定义接口** —— 没有现成的"巡逻"服务，自己写一个 `.srv`。
 
-分工：
 
-    Python：spawn_turtle（创建海龟）+ patrol_server（服务端，闭环控制海龟走路）
-    C++：patrol_client（客户端，产生随机点、请求服务、等待结果）
-    TF 广播：tf_broadcaster（订阅两只海龟的 pose，广播成坐标系）
+3. **客户端产生随机点并请求** —— C++ 节点随机生成坐标，调用服务让海龟走过去。
 
-3. 第一步：定义服务接口
-3.1 创建 .srv 文件
-<div class="code-title">终端 1</div>
 
+## 2. 整体架构
+
+
+- **Python**：`spawn_turtle`（创建海龟）+ `patrol_server`（服务端，闭环控制海龟走路）
+
+- 
+- **C++**：`patrol_client`（客户端，产生随机点、请求服务、等待结果）
+
+- 
+- **TF 广播**：`tf_broadcaster`（订阅两只海龟的 pose，广播成坐标系）
+
+
+## 3. 第一步：定义服务接口
+
+### 3.1 创建 .srv 文件
+
+```bash
 mkdir -p ~/xwg/turtle_ws/src/turtle_interfaces/srv
 gedit ~/xwg/turtle_ws/src/turtle_interfaces/srv/Patrol.srv
+```
 
+```srv
 # ============================================
 # 巡逻服务接口
 # .srv 文件用 --- 分成上下两部分：
@@ -142,25 +82,34 @@ float64 target_y        # 目标 y
 # ---- 响应：任务结果 ----
 bool success            # 是否成功接受
 string message         # 文字说明
+```
 
-3.2 更新 turtle_interfaces/CMakeLists.txt
-在 rosidl_generate_interfaces 里加上 srv 那一行（最容易漏）：
-<div class="code-title">CMakeLists.txt</div>
+### 3.2 更新 turtle_interfaces/CMakeLists.txt
 
+在 `rosidl_generate_interfaces` 里加上 srv 那一行（**最容易漏**）：
+
+```cmake
 rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/TurtleStatus.msg"
   "srv/Patrol.srv"          # ← 新增，漏了服务就不会被生成
   DEPENDENCIES builtin_interfaces
 )
+```
 
-package.xml 不用改（依赖没变）。
+`package.xml` 不用改（依赖没变）。
 
-    为什么必须登记？因为 .srv 也要被 rosidl 翻译成 Python 类和 C++ 头文件。
-    不登记的话，C++ 编译时会报 patrol.hpp: No such file。
+> 为什么必须登记？因为 `.srv` 也要被 rosidl 翻译成 Python 类和 C++ 头文件。
+> 不登记的话，C++ 编译时会报 `patrol.hpp: No such file`。
 
-4. 第二步：创建第二只海龟（Python 客户端调用 /spawn）
-<div class="code-title">src/py_turtle_control/py_turtle_control/spawn_turtle.py</div>
+---
 
+## 4. 第二步：创建第二只海龟（Python 客户端调用 /spawn）
+
+```bash
+gedit ~/xwg/turtle_ws/src/py_turtle_control/py_turtle_control/spawn_turtle.py
+```
+
+```python
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
@@ -232,40 +181,33 @@ def main(args=None):
 
 if __name__ == '__main__':
     main()
+```
 
-4.1 关键概念讲解
-代码
-	
-讲解
-create_client(Spawn, '/spawn')
-	
-创建客户端。第一个参数是服务类型（从 .srv 生成），第二个是服务名
-wait_for_service(timeout_sec=1.0)
-	
-必须等服务端上线。turtlesim 没启动的话，这个服务不存在，直接请求会失败
-Spawn.Request()
-	
-服务类型里有个内部类 Request，实例化后填请求字段
-call_async(request)
-	
-异步发送，立刻返回一个 future 对象，不阻塞
-future.done()
-	
-查询"服务端回应了没有"
-future.result()
-	
-拿到响应对象，里面有 .name 等响应字段
-rclpy.spin_once(node)
-	
-只处理一次通信事件就返回，配合 while 循环等待——这是客户端等响应的标准写法
+### 4.1 关键概念讲解
 
-    为什么不用 call() 同步调用？
-    同步调用会彻底阻塞线程，期间连日志都打不出来。
-    异步 + spin_once 循环是 ROS2 推荐的客户端写法。
+| 代码 | 讲解 |
+|---|---|
+| `create_client(Spawn, '/spawn')` | 创建客户端。第一个参数是服务类型（从 .srv 生成），第二个是服务名 |
+| `wait_for_service(timeout_sec=1.0)` | 必须等服务端上线。turtlesim 没启动的话，这个服务不存在，直接请求会失败 |
+| `Spawn.Request()` | 服务类型里有个内部类 `Request`，实例化后填请求字段 |
+| `call_async(request)` | 异步发送，立刻返回一个 future 对象，不阻塞 |
+| `future.done()` | 查询"服务端回应了没有" |
+| `future.result()` | 拿到响应对象，里面有 `.name` 等响应字段 |
+| `rclpy.spin_once(node)` | 只处理一次通信事件就返回，配合 while 循环等待——这是客户端等响应的标准写法 |
 
-5. 第三步：巡逻服务端（Python，闭环控制海龟走路）
-<div class="code-title">src/py_turtle_control/py_turtle_control/patrol_server.py</div>
+> 为什么不用 `call()` 同步调用？
+> 同步调用会彻底阻塞线程，期间连日志都打不出来。
+> 异步 + `spin_once` 循环是 ROS2 推荐的客户端写法。
 
+---
+
+## 5. 第三步：巡逻服务端（Python，闭环控制海龟走路）
+
+```bash
+gedit ~/xwg/turtle_ws/src/py_turtle_control/py_turtle_control/patrol_server.py
+```
+
+```python
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
@@ -401,7 +343,7 @@ class PatrolServer(Node):
             status.y = msg.y
             status.theta = msg.theta
             status.linear_speed = cmd.linear.x
-            status.angular_speed = cmd.angular_speed
+            status.angular_speed = cmd.angular.z
             status.stamp = self.get_clock().now().to_msg()
             self.status_pub_.publish(status)
             self.get_logger().info(
@@ -423,30 +365,40 @@ def main(args=None):
 
 if __name__ == '__main__':
     main()
+```
 
-5.1 最重要的设计：服务回调为什么立刻返回
+### 5.1 最重要的设计：服务回调为什么立刻返回
 
-    因为 rclpy.spin(node) 是单线程的：它在执行你的回调时，无法同时处理其他回调。
+> 因为 `rclpy.spin(node)` 是单线程的：它在执行你的回调时，无法同时处理其他回调。
 
-如果服务回调里写个 while 死等到海龟到达，那 pose_callback 根本没机会执行 →
-海龟收不到速度 → 永远到不了 → 死锁。
+如果服务回调里写个 `while` 死等到海龟到达，那 `pose_callback` 根本没机会执行 →
+海龟收不到速度 → 永远到不了 → **死锁**。
 
-    正确做法：服务回调只"接任务、立刻回复"，真正的移动交给 pose_callback 异步做。
-    这是 ROS2 服务编程的核心思维。
+> 正确做法：服务回调只"接任务、立刻回复"，真正的移动交给 `pose_callback` 异步做。
+> 这是 ROS2 服务编程的核心思维。
 
-5.2 闭环控制那几行（精华）
+### 5.2 闭环控制那几行（精华）
 
+```python
 dx = target_x - pose.x           # ① 订阅到位置
 dy = target_y - pose.y
 distance = hypot(dx, dy)         # ② 算误差
 cmd.linear.x = min(2.0, distance)  # ③ 误差 → 控制量（P 控制）
 cmd.angular.z = 2.0 * angle_error
 cmd_pub.publish(cmd)             # ④ 发布控制，回到①
+```
 
 这就是"收反馈 → 算误差 → 发指令"的完整回路，PID、导航、机械臂全是它的加强版。
-6. 第四步：C++ 客户端（产生随机点、请求服务）
-<div class="code-title">src/cpp_status_listener/src/patrol_client.cpp</div>
 
+---
+
+## 6. 第四步：C++ 客户端（产生随机点、请求服务）
+
+```bash
+gedit ~/xwg/turtle_ws/src/cpp_status_listener/src/patrol_client.cpp
+```
+
+```cpp
 // =====================================================================
 // 节点：patrol_client —— C++ 编写的【客户端】
 // 干什么：每隔几秒随机生成一个坐标，调用 /patrol 服务让 turtle2 走过去，
@@ -570,57 +522,56 @@ int main(int argc, char ** argv)
   rclcpp::shutdown();
   return 0;
 }
+```
 
-6.1 C++ 客户端关键点讲解
-代码
-	
-讲解
-create_client<Patrol>("/patrol")
-	
-创建客户端，尖括号里是服务类型，参数是服务名
-wait_for_service(1s)
-	
-等服务端上线，1s 是 C++14 的时间字面量
-Patrol::Request()
-	
-服务类型的内部类 Request，std::make_shared 创建
-async_send_request(请求, 回调)
-	
-异步发送 + 回调函数，收到响应时自动执行 lambda，不用自己轮询
-result.get()
-	
-从 future 里取出响应对象
-waiting_ 标志
-	
-防止上一次还没完成就发下一次（真实项目必须做这个保护）
+### 6.1 C++ 客户端关键点讲解
 
-    为什么 C++ 这里可以用回调而不阻塞？
-    因为 async_send_request 的第二个参数就是响应回调，
-    spin 会在响应到达时自动调用它——C++ 的 executor 天然支持这种模式，
-    比 Python 的 spin_once 循环更优雅。
+| 代码 | 讲解 |
+|---|---|
+| `create_client<Patrol>("/patrol")` | 创建客户端，尖括号里是服务类型，参数是服务名 |
+| `wait_for_service(1s)` | 等服务端上线，`1s` 是 C++14 的时间字面量 |
+| `Patrol::Request()` | 服务类型的内部类 `Request`，`std::make_shared` 创建 |
+| `async_send_request(请求, 回调)` | 异步发送 + 回调函数，收到响应时自动执行 lambda，不用自己轮询 |
+| `result.get()` | 从 future 里取出响应对象 |
+| `waiting_` 标志 | 防止上一次还没完成就发下一次（真实项目必须做这个保护） |
 
-7. 第五步：TF 广播——让 RViz2 看到坐标系跟着动
-这一步是上一篇话题项目里没有的。核心认知：
+> 为什么 C++ 这里可以用回调而不阻塞？
+> 因为 `async_send_request` 的第二个参数就是响应回调，
+> `spin` 会在响应到达时自动调用它——C++ 的 executor 天然支持这种模式，
+> 比 Python 的 `spin_once` 循环更优雅。
 
-    /pose 是数据，/tf 是坐标关系。
-    turtlesim 只发 /pose，不会自动把它声明成坐标系。
-    这个"桥接"工作必须自己写。
+---
 
-7.1 为什么要理解四元数
-turtlesim 的 pose.theta 是一个朝向角（绕 Z 轴转了多少弧度）。
-要广播成 TF，必须把它转成四元数。四元数的几何含义：
+## 7. 第五步：TF 广播——让 RViz2 看到坐标系跟着动
 
-    w = cos(θ/2) —— 编码"转了多少"
-    (x, y, z) = 轴方向 × sin(θ/2) —— 编码"绕哪根轴转"
-    turtle2 只在二维平面转，所以只有 z 分量非零，x、y 恒为 0
+这一步是**上一篇话题项目里没有的**。核心认知：
 
+> **`/pose` 是数据，`/tf` 是坐标关系。**
+> turtlesim 只发 `/pose`，不会自动把它声明成坐标系。
+> 这个"桥接"工作必须自己写。
+
+### 7.1 为什么要理解四元数
+
+turtlesim 的 `pose.theta` 是一个**朝向角**（绕 Z 轴转了多少弧度）。
+要广播成 TF，必须把它转成**四元数**。四元数的几何含义：
+
+- `w = cos(θ/2)` —— 编码"转了多少"
+- `(x, y, z) = 轴方向 × sin(θ/2)` —— 编码"绕哪根轴转"
+- turtle2 只在二维平面转，所以只有 **z 分量非零**，x、y 恒为 0
+
+```python
 half = theta / 2.0
 q.z = sin(half)
 q.w = cos(half)
+```
 
-7.2 tf_broadcaster.py
-<div class="code-title">src/py_turtle_control/py_turtle_control/tf_broadcaster.py</div>
+### 7.2 tf_broadcaster.py
 
+```bash
+gedit ~/xwg/turtle_ws/src/py_turtle_control/py_turtle_control/tf_broadcaster.py
+```
+
+```python
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
@@ -699,27 +650,39 @@ def main():
 
 if __name__ == '__main__':
     main()
+```
 
-7.3 QoS 这个坑必须讲清
+### 7.3 QoS 这个坑必须讲清
+
 这是本篇最容易踩的坑，值得单独说：
 
+```python
 sensor_qos = QoSProfile(
     reliability=QoSReliabilityPolicy.BEST_EFFORT, ...)
+```
 
-    turtlesim 的 /pose 用的是 best_effort（宁可丢帧也要实时）
-    create_subscription 默认用 reliable（必须收到每一条）
-    两者不兼容时，订阅静默失败：不报错、不回调、日志里什么都没有
+- turtlesim 的 `/pose` 用的是 **best_effort**（宁可丢帧也要实时）
+- `create_subscription` 默认用 **reliable**（必须收到每一条）
+- **两者不兼容时，订阅静默失败**：不报错、不回调、日志里什么都没有
 
-现象就是：/turtle1/pose 话题明明有数据，ros2 topic echo 也能看到，
+现象就是：`/turtle1/pose` 话题明明有数据，`ros2 topic echo` 也能看到，
 但 TF 里永远只有 turtle2，turtle1 死活不出来。
 
-    判断技巧：launch 崩溃时那一大屏红字，90% 都是"多米诺骨牌"式的连锁反应，
-    真正的源头永远是第一个 [ERROR] [launch]。
+> 判断技巧：launch 崩溃时那一大屏红字，90% 都是"多米诺骨牌"式的连锁反应，
+> 真正的源头永远是**第一个 `[ERROR] [launch]`**。
 
-8. 第六步：launch 一键拉起
-8.1 turtles_patrol.launch.py
-<div class="code-title">src/py_turtle_control/launch/turtles_patrol.launch.py</div>
+---
 
+## 8. 第六步：launch 一键拉起
+
+### 8.1 turtles_patrol.launch.py
+
+```bash
+mkdir -p ~/xwg/turtle_ws/src/py_turtle_control/launch
+gedit ~/xwg/turtle_ws/src/py_turtle_control/launch/turtles_patrol.launch.py
+```
+
+```python
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
@@ -784,9 +747,11 @@ def generate_launch_description():
         # ⑤ turtle1 转圈
         turtle_circle,
     ])
+```
 
-8.2 setup.py 必须注册新节点
+### 8.2 setup.py 必须注册新节点
 
+```python
 entry_points={
     'console_scripts': [
         'turtle_circle  = py_turtle_control.turtle_circle:main',
@@ -795,9 +760,11 @@ entry_points={
         'tf_broadcaster = py_turtle_control.tf_broadcaster:main',  # ← 新增
     ],
 },
+```
 
-并且 data_files 只能有一个（重复定义会直接让 colcon build 失败）：
+并且 `data_files` **只能有一个**（重复定义会直接让 `colcon build` 失败）：
 
+```python
 data_files=[
     ('share/ament_index/resource_index/packages',
      ['resource/' + package_name]),
@@ -807,76 +774,102 @@ data_files=[
       for f in os.listdir('launch')
       if f.endswith('.launch.py')]),
 ],
+```
 
-8.3 CMakeLists.txt 追加第二个可执行文件
+### 8.3 CMakeLists.txt 追加第二个可执行文件
 
+```cmake
 # 第二个可执行文件：巡逻客户端
 add_executable(patrol_client src/patrol_client.cpp)
 ament_target_dependencies(patrol_client rclcpp turtle_interfaces)
 install(TARGETS patrol_client DESTINATION lib/${PROJECT_NAME})
+```
 
-9. 编译
-<div class="code-title">终端 1</div>
+---
 
+## 9. 编译
+
+```bash
 cd ~/xwg/turtle_ws
 source /opt/ros/humble/setup.bash
 colcon build
 source install/setup.bash
+```
 
-看到 Summary: 3 packages finished 就成功了。
+看到 `Summary: 3 packages finished` 就成功了。
+
 验证服务接口生成成功：
-
+```bash
 ros2 interface show turtle_interfaces/srv/Patrol
-
+```
 能看到上下两部分（请求 + 响应）就对了。
-10. 运行与 TF 可视化
-10.1 一键启动
 
+---
+
+## 10. 运行与 TF 可视化
+
+### 10.1 一键启动
+
+```bash
 ros2 launch py_turtle_control turtles_patrol.launch.py
+```
 
 你会看到：
+- turtle1 在转圈
+- 3 秒后 turtle2 出现
+- 终端打印：`收到巡逻请求：目标 (x, y)` → `巡逻中：距目标 ...` → `✅ 已到达目标点`
+- turtle2 每 8 秒换一个点随机走
 
-    turtle1 在转圈
-    3 秒后 turtle2 出现
-    终端打印：收到巡逻请求：目标 (x, y) → 巡逻中：距目标 ... → ✅ 已到达目标点
-    turtle2 每 8 秒换一个点随机走
+### 10.2 验证两只海龟的 TF 都在
 
-10.2 验证两只海龟的 TF 都在
-
+```bash
 ros2 topic echo /tf
+```
 
-应该同时看到 child_frame_id: turtle1 和 child_frame_id: turtle2，
+应该同时看到 `child_frame_id: turtle1` 和 `child_frame_id: turtle2`，
 且坐标都在实时变化。
-10.3 RViz2 里看坐标系跟着动
 
+### 10.3 RViz2 里看坐标系跟着动
+
+```bash
 rviz2
+```
 
 配置（按顺序点）：
+1. 左侧 **Global Options → Fixed Frame** 改成 **`world`**
+2. 左下角 **Add → TF → OK**
+3. TF 设置里勾选：
+   - ✅ Show Axes（看红绿蓝三根轴）
+   - ✅ Show Names（看名字）
+   - ✅ Show Arrows（看父子连线）
+   - **Marker Scale = 1**
 
-    左侧 Global Options → Fixed Frame​ 改成 world
-    左下角 Add → TF → OK
-    TF 设置里勾选：
-        ✅ Show Axes（看红绿蓝三根轴）
-        ✅ Show Names（看名字）
-        ✅ Show Arrows（看父子连线）
-        Marker Scale = 1
+效果：两只海龟各自带一个坐标轴，turtle2 移动时它的轴会**平移 + 旋转**跟着动。
 
-效果：两只海龟各自带一个坐标轴，turtle2 移动时它的轴会平移 + 旋转跟着动。
-10.4 顺手补一个 world 根帧（可选但规范）
-world 这个根帧默认是隐式的，规范做法是显式发出来：
+### 10.4 顺手补一个 world 根帧（可选但规范）
 
+`world` 这个根帧默认是隐式的，规范做法是显式发出来：
+
+```bash
 ros2 run tf2_ros static_transform_publisher 0 0 0 0 0 0 map world
+```
 
-然后 RViz2 里 Fixed Frame 改成 map，整条链变成：
+然后 RViz2 里 **Fixed Frame 改成 `map`**，整条链变成：
 
+```
 map          ← 真正的根（由 static_transform_publisher 显式发布）
  └── world   ← turtlesim 的坐标原点
       ├── turtle1
       └── turtle2
+```
 
 这是 ROS 里最规范的写法。
-11. 调试命令速查
 
+---
+
+## 11. 调试命令速查
+
+```bash
 ros2 service list                    # 应看到 /spawn、/patrol 等
 ros2 service type /patrol            # 查看服务类型
 ros2 service call /patrol turtle_interfaces/srv/Patrol "{target_x: 8.0, target_y: 8.0}"
@@ -885,38 +878,49 @@ ros2 node list                       # 应看到 patrol_server、patrol_client �
 rqt_graph                            # 看节点和话题/服务的连线
 ros2 topic echo /tf                  # 看两只海龟的坐标变换
 ros2 run tf2_tools view_frames       # 把 TF 树导出成 frames.pdf
+```
 
-    ros2 service call 这条特别有用——服务端写好后，不用等客户端就能单独验证它对不对。
+> `ros2 service call` 这条特别有用——服务端写好后，不用等客户端就能单独验证它对不对。
 
-12. 两个最容易踩的坑
+---
 
-    服务回调里千万别死等（会死锁，海龟不动）。
-    记住：服务回调只接任务立刻返回，异步任务交给话题回调。
-    别忘了在 rosidl_generate_interfaces 里登记 srv/Patrol.srv，
-    漏了服务类型就生成不出来，C++ 会报 patrol.hpp: No such file。
-    订阅 /pose 必须显式指定 best_effort QoS，
-    否则 turtle1 的 TF 会静默丢失（本篇最大坑）。
-    launch 里每个 Node 变量只能出现一次，
-    重复加入会报 executed more than once。
-    setup.py 里 data_files 不能重复定义，
-    否则 colcon build 直接失败，launch 文件也注册不进去。
+## 12. 两个最容易踩的坑
 
-13. 回头看：话题 vs 服务，到底怎么选
+1. **服务回调里千万别死等**（会死锁，海龟不动）。
+   记住：服务回调只接任务立刻返回，异步任务交给话题回调。
+
+2. **别忘了在 `rosidl_generate_interfaces` 里登记 `srv/Patrol.srv`**，
+   漏了服务类型就生成不出来，C++ 会报 `patrol.hpp: No such file`。
+
+3. **订阅 `/pose` 必须显式指定 `best_effort` QoS**，
+   否则 turtle1 的 TF 会静默丢失（本篇最大坑）。
+
+4. **launch 里每个 Node 变量只能出现一次**，
+   重复加入会报 `executed more than once`。
+
+5. **`setup.py` 里 `data_files` 不能重复定义**，
+   否则 `colcon build` 直接失败，launch 文件也注册不进去。
+
+---
+
+## 13. 回头看：话题 vs 服务，到底怎么选
+
 做完这两个项目，你应该有体感了：
 
-    turtle1 转圈​ → 用话题。速度指令是持续流，谁爱听谁听，不需要回应。
-    turtle2 巡逻​ → 用服务。"去 (8, 8)" 是一个任务，客户端必须知道"到了没有"。
+- **turtle1 转圈** → 用话题。速度指令是持续流，谁爱听谁听，不需要回应。
+- **turtle2 巡逻** → 用服务。"去 (8, 8)" 是一个任务，客户端必须知道"到了没有"。
 
 选型口诀：
 
-    持续的数据用话题，一次性的任务用服务。
+> **持续的数据用话题，一次性的任务用服务。**
 
-而 TF​ 是这两者的"空间层"——它不负责传业务数据，
-只负责回答一个问题："某个坐标系，此刻在世界里的哪个位置、什么朝向？"
-14. 下一步可以做什么
+而 **TF** 是这两者的"空间层"——它不负责传业务数据，
+只负责回答一个问题：**"某个坐标系，此刻在世界里的哪个位置、什么朝向？"**
 
-    把 Action​ 加进来：巡逻这种"长时间任务"其实更适合 Action（自带取消 + 进度反馈）。
-    给 launch 加条件参数：ros2 launch ... interval:=5 动态改巡逻间隔。
-    用 tf2_geometry_msgs 做坐标变换计算：比如算两只海龟之间的距离。
+---
 
-</div>
+## 14. 下一步可以做什么
+
+1. 把 **Action** 加进来：巡逻这种"长时间任务"其实更适合 Action（自带取消 + 进度反馈）。
+2. 给 launch 加**条件参数**：`ros2 launch ... interval:=5` 动态改巡逻间隔。
+3. 用 `tf2_geometry_msgs` 做**坐标变换计算**：比如算两只海龟之间的距离。
