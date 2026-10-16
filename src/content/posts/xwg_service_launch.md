@@ -884,7 +884,7 @@ rviz2
    - **Marker Scale = 1**
 
 效果：两只海龟各自带一个坐标轴，turtle2 移动时它的轴会**平移 + 旋转**跟着动。
-![887-xwg_service](/image/xwg_node/p20-3.png)
+![887-xwg_service](/image/xwg_node/p20-3-1.png)
 
 
 
