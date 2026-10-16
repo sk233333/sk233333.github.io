@@ -171,7 +171,9 @@ class SpawnTurtle(Node):
 
         # ---- 关键：给 future 挂一个"完成回调" ----
         # 服务端一回应，rclpy 会在 spin 时自动调用这个回调，无需手动轮询 done()
+        #self._spawn_callback 不加括号 = 把函数本身（一个"可调用的东西"）交出去，等以后由别人来调用。
         self.future_.add_done_callback(self._spawn_callback)
+        
 
         self.get_logger().info(f'已发送创建请求：{name} 在 ({x}, {y})')
 
@@ -186,7 +188,7 @@ class SpawnTurtle(Node):
         raise SystemExit
 
 def main(args=None):
-    rclpy.init(args=args)
+    rclpy.init(args=args) #ROS2 Python客户端库的初始化函数
     node = SpawnTurtle()
 
     # ---- 回调里会 raise SystemExit 结束 spin ----
@@ -212,6 +214,14 @@ if __name__ == '__main__':
 | `future.add_done_callback(cb)` | 给 future 挂"完成回调"。服务端一回应，rclpy 在 spin 时自动调用回调，无需手动轮询 |
 | `future.result()` | 拿到响应对象，里面有 `.name` 等响应字段 |
 | `rclpy.spin_once(node)` | 持续处理通信事件，直到节点被关闭；回调在 spin 过程中自动触发 |
+
+
+#### 用future流程
+![220_xwg_service](/image/xwg_node/p20-2-1.png)
+
+
+### 可能产生的疑问：
+
 
 #### 1.为什么不用`call()` 同步调用？
 
@@ -441,7 +451,7 @@ gedit ~/xwg/turtle_ws/src/cpp_status_listener/src/patrol_client.cpp
 ```
 
 
-### 以下是客户端C++的代码
+### 以下是patrol_client.cpp完整代码
 ```cpp
 // =====================================================================
 // 节点：patrol_client —— C++ 编写的【客户端】
@@ -456,17 +466,17 @@ gedit ~/xwg/turtle_ws/src/cpp_status_listener/src/patrol_client.cpp
 //   第5步 spin / 等待 future 完成，拿 Response
 // =====================================================================
 
-#include <chrono>
-#include <cstdlib>
-#include <ctime>
-#include <memory>
+#include <chrono>  // 引入"时间"相关的工具
+#include <cstdlib>// 引入"通用工具"：随机数、字符串转数字、程序退出等
+#include <ctime>  // 类似python time
+#include <memory> // 回收内存
 
 #include "rclcpp/rclcpp.hpp"
 #include "turtle_interfaces/srv/patrol.hpp"
 #include "turtle_interfaces/msg/turtle_status.hpp"
 
 using std::placeholders::_1;
-using namespace std::chrono_literals;
+using namespace std::chrono_literals;  //using namespace std::chrono_literals; 是"时间字面量开关"——打开后就能用 500ms、1s、2min 这种直观写法替代 
 
 class PatrolClient : public rclcpp::Node
 {
