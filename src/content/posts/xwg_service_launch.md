@@ -2,7 +2,7 @@
 title: "ROS2 服务+TF 项目-小乌龟随机巡逻与坐标系可视化详解"
 published: 2026-10-15
 description: "在上一个话题项目基础上，引入 ROS2 第二种通信方式：服务（Service），并让 RViz2 实时看到两只海龟的坐标系"
-image: "/image/xwg_srv/p20-1.jpg"
+image: "/image/xwg_node/p20-1.jpg"
 category: "ROS2学习日常"
 draft: false
 tags: [ROS2, PYTHON, C++, 服务, TF, 小乌龟, 四元数, RViz2]
