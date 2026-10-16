@@ -466,38 +466,60 @@ gedit ~/xwg/turtle_ws/src/cpp_status_listener/src/patrol_client.cpp
 //   第5步 spin / 等待 future 完成，拿 Response
 // =====================================================================
 
-#include <chrono>  // 引入"时间"相关的工具
-#include <cstdlib>// 引入"通用工具"：随机数、字符串转数字、程序退出等
-#include <ctime>  // 类似python time
-#include <memory> // 回收内存
+#include <chrono>   // 时间工具库：milliseconds、seconds 等带单位的时间类型，
+                    // 配合下面的 _literals 可以用 1s、500ms 这种直观写法
+#include <cstdlib>  // C 标准库工具箱：std::rand() 生成随机数、std::srand() 设种子、
+                    // RAND_MAX 随机数上限、std::atoi 字符串转数字等
+#include <ctime>    // 时间库：std::time() 获取当前时间戳，用来当随机数种子
+                    // （类比 Python 的 time 模块，但这里只取时间戳，不 sleep）
+#include <memory>   // 智能指针库：提供 std::shared_ptr / std::make_shared，
+                    // 让对象内存自动回收，不用手动 delete，避免内存泄漏
 
-#include "rclcpp/rclcpp.hpp"
-#include "turtle_interfaces/srv/patrol.hpp"
-#include "turtle_interfaces/msg/turtle_status.hpp"
+#include "rclcpp/rclcpp.hpp"                    // ROS2 的 C++ 客户端库（类比 Python 的 rclpy）
+#include "turtle_interfaces/srv/patrol.hpp"      // 自定义服务：patrol.srv 编译后生成的头文件
+                                                // .srv → 文件名全小写 + .hpp
+#include "turtle_interfaces/msg/turtle_status.hpp"  // 自定义消息：海龟状态，用来订阅 /turtle_status
 
-using std::placeholders::_1;
-using namespace std::chrono_literals;  //using namespace std::chrono_literals; 是"时间字面量开关"——打开后就能用 500ms、1s、2min 这种直观写法替代 
+using std::placeholders::_1;       // std::bind 的占位符，标记"将来收到的第一个参数放这里"
+                                   // 不存数据、不运行，纯粹是绑定阶段的标记
+using namespace std::chrono_literals;  // "时间字面量开关"：打开后才能写 1s、500ms、2min
+                                       // 编译器会自动转成 std::chrono::seconds(1) 等，
+                                       // 且带单位类型检查，防止把毫秒当秒用
 
+// 【第1步】继承 rclcpp::Node，把普通 C++ 类注册成 ROS2 节点
 class PatrolClient : public rclcpp::Node
 {
 public:
+  // 构造函数：节点启动时执行一次，做初始化
   PatrolClient()
-  : Node("patrol_client")
+  : Node("patrol_client")   // 节点名，ros2 node list 里显示的名字
   {
+    // ---- 声明并读取参数：巡逻间隔（秒）----
+    // declare_parameter 告诉 ROS2 "我有个参数叫 interval，默认 8.0"
+    // 运行时可通过 --ros-args -p interval:=5 覆盖，不用改代码
     this->declare_parameter<double>("interval", 8.0);
-    interval_ = this->get_parameter("interval").as_double();
+    interval_ = this->get_parameter("interval").as_double();  // 取出参数值转成 double
 
+    // ---- 设置随机数种子 ----
+    // 用当前时间戳当种子，保证每次运行生成的随机序列都不一样
+    // 不调这行的话，std::rand() 每次运行给出一模一样的序列（伪随机的通病）
     std::srand(static_cast<unsigned>(std::time(nullptr)));
 
     // 【第2步】创建客户端
+    // 模板参数 = 服务类型（由 .srv 生成），函数参数 = 服务名
+    // 创建后 client_ 就持有"通往 /patrol 服务端的通道"
     client_ = this->create_client<turtle_interfaces::srv::Patrol>("/patrol");
 
-    // 顺便订阅一下状态
+    // ---- 顺便订阅一下状态（可选，只是打印看看海龟在干嘛）----
+    // 模板参数 = 消息类型，参数依次为：话题名、队列长度、回调函数
+    // std::bind 把成员函数包装成可调用对象，_1 是占位符，代表将来收到的那条消息
     status_sub_ = this->create_subscription<turtle_interfaces::msg::TurtleStatus>(
       "/turtle_status", 10,
       std::bind(&PatrolClient::status_callback, this, _1));
 
-    // 定时器：每隔 interval_ 秒触发一次巡逻请求
+    // ---- 定时器：每隔 interval_ 秒自动触发一次 timer_callback ----
+    // interval_ 是 double（秒），乘 1000 转成毫秒，再转成带单位的时间类型
+    // 注意：这里用了 this 指针的定时器版本，回调里可以直接用成员变量
     timer_ = this->create_wall_timer(
       std::chrono::milliseconds(static_cast<int>(interval_ * 1000)),
       std::bind(&PatrolClient::timer_callback, this));
@@ -506,74 +528,109 @@ public:
   }
 
 private:
-  // 定时器回调：产生随机点并发起服务请求
+  // 定时器回调：每隔 interval_ 秒被自动调用一次
+  // 职责：产生随机点 → 等服务端 → 发请求
   void timer_callback()
   {
-    // 如果上一次请求还没完成，就跳过这次（避免堆积）
+    // ---- 请求防堆积保护 ----
+    // 如果上一次请求还没收到响应（waiting_ 仍为 true），就跳过本次
+    // 否则会短时间内发出大量请求，把服务端压垮
     if (waiting_) {
       RCLCPP_INFO(this->get_logger(), "上一次巡逻还没结束，跳过本次请求。");
       return;
     }
 
     // 【第3步】等服务端上线
+    // wait_for_service(1s)：最多等 1 秒。1s 是 C++14 时间字面量（见 using 那行）
+    // 服务端没起来（比如 patrol_server 没启动）就打警告并返回，避免请求发飞
     if (!client_->wait_for_service(1s)) {
       RCLCPP_WARN(this->get_logger(), "/patrol 服务未上线，请先启动 patrol_server！");
       return;
     }
 
-    // ---- 生成随机目标点（turtlesim 画布约 11x11）----
+    // ---- 生成随机目标点（turtlesim 画布约 11x11，留 1 的边距避免撞墙）----
+    // std::rand() 返回 0~RAND_MAX 的整数，除以 RAND_MAX 归一化到 0~1，
+    // 再乘 9 加 1，得到 1.0~10.0 的范围
     double x = 1.0 + static_cast<double>(std::rand()) / RAND_MAX * 9.0;
     double y = 1.0 + static_cast<double>(std::rand()) / RAND_MAX * 9.0;
 
     // 【第4步】构造请求
+    // Patrol::Request 是服务类型里的内部类，make_shared 创建智能指针版本
+    // （服务端接口期望的是 shared_ptr，所以这里必须这么写）
     auto request = std::make_shared<turtle_interfaces::srv::Patrol::Request>();
-    request->target_x = x;
+    request->target_x = x;   // 填请求字段（对应 .srv 里 --- 上面的部分）
     request->target_y = y;
 
     RCLCPP_INFO(this->get_logger(), "发起巡逻请求：目标 (%.2f, %.2f)", x, y);
 
-    // 异步发送，返回一个 future
-    waiting_ = true;
+    // 【第4步续】异步发送请求
+    // async_send_request 有两个"出口"：
+    //   ① 返回值：一个 SharedFuture（本代码没接住，直接丢弃）
+    //   ② 回调 lambda：响应到达时由 ROS2 自动调用，并把装着响应的 SharedFuture
+    //      作为参数传进来（就是下面 lambda 的 result 参数）
+    // 这就是"异步"的含义：发完立刻返回，不等服务端算完，当前线程继续往下走
+    waiting_ = true;   // 标记为"等待响应中"，防止定时器再次发请求
     client_->async_send_request(
       request,
+      // lambda 参数 result 的类型是 SharedFuture，即"装着响应的 future"
+      // result.get() 从中取出真正的响应对象 response
       [this](rclcpp::Client<turtle_interfaces::srv::Patrol>::SharedFuture result) {
-        // 【第5步】这个 lambda 在收到响应时自动执行
+        // 【第5步】这个 lambda 在收到响应时自动执行（由 ROS2 的 executor 调用）
+        // result.get() 取出响应，里面是 .srv 里 --- 下面的 success 和 message
         auto response = result.get();
         RCLCPP_INFO(this->get_logger(),
           "收到响应：success=%s | %s",
-          response->success ? "true" : "false",
-          response->message.c_str());
-        waiting_ = false;
+          response->success ? "true" : "false",  // bool 不能直接用 %s，要转成字符串
+          response->message.c_str());            // std::string 必须 .c_str() 才能给 %s
+        waiting_ = false;   // 关键：重置标志位，允许下一次巡逻请求
+                            // 漏了这行客户端会永久卡死在 waiting_=true
       });
+    // 注意：lambda 返回后，请求才刚发出去，响应还没到，
+    // 程序会继续往下走（这里函数就结束了），响应在 future 某个时刻到达
   }
 
-  // 订阅回调：看看海龟当前状态
+  // 订阅回调：收到 /turtle_status 时自动调用
+  // 参数类型用 ::SharedPtr（智能指针），自动管内存不用 delete
+  // msg 是 ROS2 收到的消息对象，不是你创建的，是框架塞给你的
   void status_callback(const turtle_interfaces::msg::TurtleStatus::SharedPtr msg)
   {
     count_++;
+    // 海龟状态来得很快（每秒几十次），全打印会刷屏，所以每 40 条打一次
     if (count_ % 40 == 0) {
       RCLCPP_INFO(this->get_logger(),
         "[状态 #%d] %s 位置 x=%.2f y=%.2f 速度 前=%.2f 转=%.2f",
-        count_, msg->turtle_name.c_str(),
+        count_,
+        msg->turtle_name.c_str(),  // std::string → %s 必须 .c_str()
         msg->x, msg->y,
         msg->linear_speed, msg->angular_speed);
+        // %.2f = 浮点数保留两位；%d = 整数
     }
   }
 
+  // ===== 成员变量（节点持有的资源，必须存住别被回收）=====
+  // Client 是客户端类模板，<> 里是服务类型；SharedPtr = 智能指针
   rclcpp::Client<turtle_interfaces::srv::Patrol>::SharedPtr client_;
+
+  // Subscription 是订阅者类模板，<> 里是消息类型
   rclcpp::Subscription<turtle_interfaces::msg::TurtleStatus>::SharedPtr status_sub_;
+
+  // TimerBase 是定时器基类，create_wall_timer 返回的就是它
   rclcpp::TimerBase::SharedPtr timer_;
-  bool waiting_ = false;
-  int count_ = 0;
-  double interval_ = 8.0;
+
+  bool waiting_ = false;    // 请求防堆积标志：true = 正在等响应，别再发新的
+  int count_ = 0;          // 收到消息的计数器，用来降频打印
+  double interval_ = 8.0;  // 巡逻间隔（秒），可被参数覆盖
 };
 
+// 【程序入口】ROS2 节点的标准 main 写法
 int main(int argc, char ** argv)
 {
-  rclcpp::init(argc, argv);
-  auto node = std::make_shared<PatrolClient>();
-  rclcpp::spin(node);
-  rclcpp::shutdown();
+  rclcpp::init(argc, argv);                          // 1) 初始化 ROS2 运行时
+  auto node = std::make_shared<PatrolClient>();      // 2) 创建节点（智能指针管理生命周期）
+  rclcpp::spin(node);                                // 3) 让节点活着：不断检查定时器到没到、
+                                                    //    消息来没来，到了就调对应回调
+                                                    //    没有这行，程序启动就退出，什么也收不到
+  rclcpp::shutdown();                                // 4) Ctrl+C 后收尾，释放资源
   return 0;
 }
 ```
@@ -641,74 +698,128 @@ gedit ~/xwg/turtle_ws/src/py_turtle_control/py_turtle_control/tf_broadcaster.py
 节点：tf_broadcaster —— 一个节点广播两只海龟的 TF
 订阅 /turtle1/pose 和 /turtle2/pose
 发布 world -> turtle1  和  world -> turtle2  两条变换
+
+核心认知：
+  /pose 是"数据"，/tf 是"坐标关系"。
+  turtlesim 只发 /pose，不会自动把它声明成坐标系，
+  这个"把 pose 翻译成 TF"的桥接工作必须自己写。
+
+为什么一个节点能广播两只海龟？
+  因为订阅者的回调可以用 lambda 把海龟名字"绑"进去，
+  同一个回调函数靠 turtle_name 参数区分是谁的 pose。
 """
-import math
-import rclpy
-from rclpy.node import Node
-from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSHistoryPolicy
-from turtlesim.msg import Pose
-from tf2_ros import TransformBroadcaster
-from geometry_msgs.msg import TransformStamped
+import math     # 数学库：math.sin / math.cos，用来把朝向角转成四元数
+import rclpy    # ROS2 的 Python 客户端库
+from rclpy.node import Node                        # 节点基类，必须继承
+from rclpy.qos import (QoSProfile,               # QoS 配置类（Quality of Service）
+                       QoSReliabilityPolicy,      # 可靠性策略：BEST_EFFORT / RELIABLE
+                       QoSHistoryPolicy)          # 历史策略：KEEP_LAST / KEEP_ALL
+from turtlesim.msg import Pose                    # turtlesim 自带的位置消息
+from tf2_ros import TransformBroadcaster          # TF 广播器：负责把变换发出去
+from geometry_msgs.msg import TransformStamped    # TF 消息类型：一次变换 = 一个消息
 
 
 class TFBroadcaster(Node):
+    """TF 广播节点：把两只海龟的 pose 转成坐标系变换并发布"""
+
     def __init__(self):
+        # 把普通 Python 类注册成 ROS2 节点，节点名 = 'tf_broadcaster'
+        # 不写这句，后面的 create_subscription、get_logger 全部失效
         super().__init__('tf_broadcaster')
 
+        # ---- 声明参数：父坐标系名字，默认 'world' ----
+        # 运行时可用 --ros-args -p parent_frame:=map 改成别的（比如 map）
         self.declare_parameter('parent_frame', 'world')
         self.parent_frame_ = self.get_parameter('parent_frame').value
 
+        # ---- 创建 TF 广播器 ----
+        # 这是本节点的核心工具，sendTransform 就靠它
         self.br_ = TransformBroadcaster(self)
 
         # ★ 关键：turtlesim 的 /pose 用 best_effort QoS
         #   订阅者若用默认的 reliable 会静默失败（不报错、收不到数据）
+        #
+        # 为什么会静默失败？
+        #   turtlesim 发布 /pose 时用的是 BEST_EFFORT（宁可丢帧也要实时），
+        #   create_subscription 默认用 RELIABLE（必须收到每一条）。
+        #   两者不匹配时，订阅者连不上发布者，但 ROS2 不会报错——
+        #   表现是：ros2 topic echo /turtle1/pose 能看到数据，
+        #           但 TF 里永远缺 turtle1，怎么查都查不出问题。
+        # 解决办法：显式指定和发布者一致的 QoS。
         sensor_qos = QoSProfile(
-            reliability=QoSReliabilityPolicy.BEST_EFFORT,
-            history=QoSHistoryPolicy.KEEP_LAST,
-            depth=10,
+            reliability=QoSReliabilityPolicy.BEST_EFFORT,  # 可靠性：尽力而为
+            history=QoSHistoryPolicy.KEEP_LAST,            # 历史策略：只保留最近的
+            depth=10,                                     # 队列长度：保留 10 帧
         )
 
-        # 一个节点订阅两个话题，用 lambda 把海龟名字绑进回调
+        # ---- 一个节点订阅两个话题，用 lambda 把海龟名字绑进回调 ----
+        # lambda msg: self.pose_callback(msg, 'turtle1')
+        #   含义：收到消息后，调用 pose_callback，并把 'turtle1' 作为第二个参数传进去
+        # 这样同一个回调函数就能区分"这是 turtle1 还是 turtle2 的 pose"
+        # （如果不绑名字，回调里根本不知道这条 pose 是谁的）
         self.sub_t1_ = self.create_subscription(
-            Pose, '/turtle1/pose',
-            lambda msg: self.pose_callback(msg, 'turtle1'),
-            sensor_qos)
+            Pose, '/turtle1/pose',                       # 消息类型 + 话题名
+            lambda msg: self.pose_callback(msg, 'turtle1'),  # 回调（带名字）
+            sensor_qos)                                  # QoS 配置
 
         self.sub_t2_ = self.create_subscription(
             Pose, '/turtle2/pose',
             lambda msg: self.pose_callback(msg, 'turtle2'),
             sensor_qos)
 
+        # 节点启动提示
         self.get_logger().info(
             f'TF 广播器已启动：{self.parent_frame_} -> turtle1 / turtle2')
 
     def pose_callback(self, msg: Pose, turtle_name: str):
+        """
+        订阅回调：每次收到某只海龟的 pose 就调用一次
+        msg          —— 收到的 Pose 消息（含 x, y, theta）
+        turtle_name  —— lambda 绑进来的名字（'turtle1' 或 'turtle2'）
+        """
+        # ---- 构造一条变换消息 ----
         t = TransformStamped()
-        t.header.stamp = self.get_clock().now().to_msg()
-        t.header.frame_id = self.parent_frame_   # 父帧：world
-        t.child_frame_id = turtle_name           # 子帧：turtle1 或 turtle2
 
-        # 平移
+        # 时间戳：告诉别人"这个变换是哪一刻的"，RViz2 靠它做插值
+        t.header.stamp = self.get_clock().now().to_msg()
+
+        # 父帧（坐标系树的根方向）：所有海龟都挂在它下面
+        t.header.frame_id = self.parent_frame_   # 'world'
+
+        # 子帧（这只海龟自己的坐标系）
+        t.child_frame_id = turtle_name           # 'turtle1' 或 'turtle2'
+
+        # ---- 平移部分：海龟在 world 里的位置 ----
         t.transform.translation.x = msg.x
         t.transform.translation.y = msg.y
-        t.transform.translation.z = 0.0
+        t.transform.translation.z = 0.0          # 海龟在二维平面运动，Z 恒为 0
 
-        # 旋转：朝向角 → 四元数（只绕 Z 轴）
+        # ---- 旋转部分：朝向角 theta → 四元数 ----
+        # 为什么不能直接用 theta？
+        #   TF 要求旋转用四元数表示，而 turtlesim 给的是"绕 Z 轴转了多少度"。
+        #   转换公式（只绕 Z 轴，所以 x、y 恒为 0）：
+        #     q.z = sin(θ/2)
+        #     q.w = cos(θ/2)
+        #   几何含义：w 编码"转了多少"，(x,y,z) 编码"绕哪根轴转"
         half = msg.theta / 2.0
         t.transform.rotation.x = 0.0
         t.transform.rotation.y = 0.0
         t.transform.rotation.z = math.sin(half)
         t.transform.rotation.w = math.cos(half)
 
+        # ---- 发布这条变换 ----
+        # 发布后，ros2 topic echo /tf 就能看到这条记录，
+        # RViz2 里也会出现对应的坐标系箭头
         self.br_.sendTransform(t)
 
 
 def main():
-    rclpy.init()
-    node = TFBroadcaster()
-    rclpy.spin(node)
-    node.destroy_node()
-    rclpy.shutdown()
+    """程序入口"""
+    rclpy.init()                          # 1) 初始化 ROS2
+    node = TFBroadcaster()                # 2) 创建节点
+    rclpy.spin(node)                      # 3) 持续运转：有 pose 来就调回调，不断广播
+    node.destroy_node()                   # 4) 释放资源
+    rclpy.shutdown()                      # 5) 关闭 rclpy
 
 
 if __name__ == '__main__':
@@ -755,69 +866,191 @@ gedit ~/xwg/turtle_ws/src/py_turtle_control/launch/turtles_patrol.launch.py
 """
 launch/turtles_patrol.launch.py
 一键拉起：turtlesim + turtle1转圈 + 创建turtle2 + turtle2随机巡逻 + TF广播
+
+启动顺序（有依赖关系，不能随意调换）：
+  ① turtlesim_node     模拟器（必须先起，提供服务 /spawn 和话题 /pose、/cmd_vel）
+  ② spawn_turtle       生出海龟 turtle2（依赖 ① 的 /spawn 服务）
+  ③ patrol_server      巡逻服务端（订阅 pose、发布 cmd_vel、提供 /patrol 服务）
+  ④ patrol_client      C++ 客户端（定时发随机目标点）
+  ⑤ turtle_circle      turtle1 转圈
+  ⑥ tf_broadcaster     广播两只海龟的 TF（依赖 ①② 的 /pose 话题）
+
+其中 ②⑥ 用 TimerAction 延迟 3 秒，保证 ① 的服务和话题已经注册完成。
 """
+
+
+# ============================================================
+# 一、导入区
+# ============================================================
+
+# LaunchDescription：launch 文件的"根容器"，
+# 所有要启动的节点、延时、事件处理器都装在这个对象里返回。
 from launch import LaunchDescription
+
+# TimerAction：延时动作。
+# 作用：等 N 秒后再启动某个节点，用来解决"依赖的服务还没准备好"的问题。
 from launch.actions import TimerAction
+
+# Node：描述"一个要启动的 ROS2 节点"。
+# 对应命令行里的：ros2 run <package> <executable>
 from launch_ros.actions import Node
 
 
+# ============================================================
+# 二、固定函数名：generate_launch_description
+# ============================================================
+# 注意：函数名必须是这个，不能改！
+# ros2 launch 会自动调用这个函数，拿到 LaunchDescription 对象。
+# 如果改名，launch 会报 "generate_launch_description" not found。
+
 def generate_launch_description():
 
+    # =========================================================
+    # 节点 ①：turtlesim 模拟器
+    # =========================================================
+    # 这是整个系统的"地基"，必须第一个启动。
+    # 它起来之后才会提供：
+    #   - /spawn 服务（生海龟）
+    #   - /turtle1/pose、/turtle2/pose 话题
+    #   - /turtle1/cmd_vel、/turtle2/cmd_vel 话题
     turtlesim_node = Node(
-        package='turtlesim', executable='turtlesim_node',
-        name='turtlesim', output='screen')
+        package='turtlesim',         # 包名（ros2 pkg list 里看到的）
+        executable='turtlesim_node', # 可执行文件名（包里 entry_point / install 里的名字）
+        name='turtlesim',           # 节点名（ros2 node list 里显示的名字，可自定义）
+        output='screen',            # 日志打印到屏幕（默认是 log 文件，看不到实时输出）
+    )
 
+    # =========================================================
+    # 节点 ②：spawn_turtle —— 创建第二只海龟 turtle2
+    # =========================================================
+    # 依赖关系：必须等 ① 起来，否则 /spawn 服务不存在会失败。
+    # 解决办法：不直接放进 LaunchDescription，
+    #          而是用 TimerAction 包一层，延迟 3 秒再启动（见下方 return 部分）。
     spawn_turtle = Node(
-        package='py_turtle_control', executable='spawn_turtle',
-        name='spawn_turtle', output='screen',
-        parameters=[{'x': 2.0, 'y': 2.0, 'theta': 0.0, 'name': 'turtle2'}])
+        package='py_turtle_control',  # 你的 Python 包
+        executable='spawn_turtle',    # setup.py 里 entry_points 注册的名字
+        name='spawn_turtle',          # 节点名
+        output='screen',              # 日志输出到屏幕
 
+        # parameters：给节点传参数，等价于命令行 --ros-args -p x:=2.0
+        # 这些参数在节点里用 declare_parameter() 接收。
+        # 这里把海龟出生位置写死在 (2, 2)，面向 0 弧度，名字叫 turtle2。
+        parameters=[{
+            'x': 2.0,       # 出生 x 坐标
+            'y': 2.0,       # 出生 y 坐标
+            'theta': 0.0,   # 出生朝向（弧度）
+            'name': 'turtle2',  # 海龟名字，也是后续话题名 /turtle2/pose 的来源
+        }],
+    )
+
+    # =========================================================
+    # 节点 ③：patrol_server —— 巡逻服务端（核心控制节点）
+    # =========================================================
+    # 它同时扮演三种角色：
+    #   A. 服务端：提供 /patrol 服务，接收"去 (x,y)"的请求
+    #   B. 订阅者：订阅 /turtle2/pose 获取海龟实时位置
+    #   C. 发布者：发布 /turtle2/cmd_vel 让海龟动起来
+    # 控制逻辑：收位置 → 算误差 → 发速度 → 循环，直到距离 < tolerance
     patrol_server = Node(
-        package='py_turtle_control', executable='patrol_server',
-        name='patrol_server', output='screen',
-        parameters=[{'turtle_name': 'turtle2',
-                     'tolerance': 0.2,
-                     'max_linear': 2.0,
-                     'max_angular': 2.0}])
+        package='py_turtle_control',
+        executable='patrol_server',
+        name='patrol_server',
+        output='screen',
+        parameters=[{
+            'turtle_name': 'turtle2',  # 控制哪只海龟（决定订阅/发布哪个话题）
+            'tolerance': 0.2,          # 到达阈值：距离 < 0.2 就算到了
+            'max_linear': 2.0,         # 最大前进速度（防止撞墙）
+            'max_angular': 2.0,        # 最大角速度（防止转太快）
+        }],
+    )
 
+    # =========================================================
+    # 节点 ④：patrol_client —— C++ 客户端（随机点生成器）
+    # =========================================================
+    # 行为：每隔 interval 秒，随机生成一个坐标 (x,y)，
+    #       然后调用 /patrol 服务，让服务端把海龟送过去。
+    # 它自己不动海龟，只负责"下命令"。
     patrol_client = Node(
-        package='cpp_status_listener', executable='patrol_client',
-        name='patrol_client', output='screen',
-        parameters=[{'interval': 8.0}])
+        package='cpp_status_listener',  # 这个可执行文件在 C++ 包里
+        executable='patrol_client',     # CMakeLists.txt 里 add_executable 的名字
+        name='patrol_client',
+        output='screen',
+        parameters=[{
+            'interval': 8.0,   # 每隔 8 秒发一次巡逻请求
+        }],
+    )
 
+    # =========================================================
+    # 节点 ⑤：turtle_circle —— turtle1 转圈
+    # =========================================================
+    # 就是你的第一个项目的节点，让 turtle1 绕圈。
+    # 它和 turtle2 的巡逻互不干扰，各自发各自的 cmd_vel。
     turtle_circle = Node(
-        package='py_turtle_control', executable='turtle_circle',
-        name='turtle_circle', output='screen')
+        package='py_turtle_control',
+        executable='turtle_circle',
+        name='turtle_circle',
+        output='screen',
+        # 这里没传参数，说明节点内部用了默认值（比如半径、线速度写死在代码里）
+    )
 
+    # =========================================================
+    # 节点 ⑥：tf_broadcaster —— TF 广播器
+    # =========================================================
+    # 作用：订阅 /turtle1/pose 和 /turtle2/pose，
+    #       发布 world -> turtle1 和 world -> turtle2 两条坐标变换。
+    # RViz2 里看到的坐标系箭头就是它广播出来的。
+    # 依赖：必须等 ①② 起来、/pose 话题有数据之后才有意义。
     tf_broadcaster = Node(
-        package='py_turtle_control', executable='tf_broadcaster',
-        name='tf_broadcaster', output='screen',
-        parameters=[{'parent_frame': 'world'}])
+        package='py_turtle_control',
+        executable='tf_broadcaster',
+        name='tf_broadcaster',
+        output='screen',
+        parameters=[{
+            'parent_frame': 'world',  # TF 树的根帧名字
+        }],
+    )
 
-    #  关键原则：每个 Node 变量只能出现一次！
-    # 要么直接放进列表，要么包进 TimerAction，不能两边都写。
+    # =========================================================
+    # 三、组装 LaunchDescription 并返回
+    # =========================================================
+    # 关键原则：每个 Node 变量只能出现一次！
+    #   要么直接放进列表，要么包进 TimerAction，不能两边都写。
+    #   重复加入会报 "executed more than once"。
+    #
+    # 注意：列表里的顺序 ≠ 启动顺序！
+    #   ROS2 launch 会并发启动列表里所有"没有依赖约束"的节点。
+    #   有依赖的节点必须用 TimerAction 显式约束。
     return LaunchDescription([
 
-        # ① 立即启动模拟器
+        # ① 立即启动模拟器（地基，必须先起）
         turtlesim_node,
 
-        # ② spawn + tf：3 秒后一起启动
-        #    spawn 依赖 /spawn 服务，tf 依赖 /pose 话题，都需要等 turtlesim 起来
+        # ② + ⑥：3 秒后一起启动
+        #   spawn_turtle 依赖 /spawn 服务（需要 ① 先起）
+        #   tf_broadcaster 依赖 /pose 话题（需要 ① 先起，且 ② 创建 turtle2 后才有 /turtle2/pose）
+        # TimerAction 的作用：
+        #   period    —— 延迟时间（秒），这里给模拟器留足启动时间
+        #   actions   —— 延迟后要执行的动作列表，可以放多个 Node
+        # 为什么不用 OnProcessStart 事件？
+        #   因为 OnProcessStart 触发太早（进程刚 fork，服务还没注册），
+        #   用固定延时更稳妥、日志也更干净。
         TimerAction(period=3.0, actions=[spawn_turtle, tf_broadcaster]),
 
-        # ③ 巡逻服务端
+        # ③ 巡逻服务端（内部有 wait_for_service 重试保护，不怕稍晚一点）
         patrol_server,
 
-        # ④ 巡逻客户端
+        # ④ 巡逻客户端（内部也有 wait_for_service 保护）
         patrol_client,
 
-        # ⑤ turtle1 转圈
+        # ⑤ turtle1 转圈（和 turtle2 无关，随时可起）
         turtle_circle,
     ])
 ```
 
 ### 8.2 setup.py 必须注册新节点
 
+
+先在setup.py执行以下操作：
 ```python
 entry_points={
     'console_scripts': [
@@ -829,27 +1062,39 @@ entry_points={
 },
 ```
 
-并且 `data_files` **只能有一个**（重复定义会直接让 `colcon build` 失败）：
 
+之后在setup.py继续进行操作：
 ```python
+import os  #添加到开头部分
+
+#找到data_filds这个列表
 data_files=[
     ('share/ament_index/resource_index/packages',
      ['resource/' + package_name]),
-    ('share/' + package_name, ['package.xml']),
-    ('share/' + package_name + '/launch',
+    ('share/' + package_name, ['package.xml']), #1、2 行是 ros2 pkg create 自带的基础配置
+    ('share/' + package_name + '/launch',    #
      [os.path.join('launch', f)
       for f in os.listdir('launch')
       if f.endswith('.launch.py')]),
 ],
 ```
+这三行是"安装清单"：'data_files' 每一行都是 (装到哪, 装什么) 的配对。第 3 行用"列表推导式"自动扫描 'launch/' 目录、只挑 '.launch.py' 结尾的文件装进 'install/share/包名/launch/'，这样以后新增 'launch' 文件不用改 'setup.py'。
 
-### 8.3 CMakeLists.txt 追加第二个可执行文件
 
+### 8.3 cpp下CMakeLists.txt 追加第二个可执行文件
+
+
+分别加在之前的后面：
 ```cmake
 # 第二个可执行文件：巡逻客户端
-add_executable(patrol_client src/patrol_client.cpp)
-ament_target_dependencies(patrol_client rclcpp turtle_interfaces)
-install(TARGETS patrol_client DESTINATION lib/${PROJECT_NAME})
+add_executable(status_listener src/status_listener.cpp)
+add_executable(patrol_client src/patrol_client.cpp)  #<-新增（有注释加到前面注释下面
+
+ament_target_dependencies(status_listener rclcpp turtle_interfaces)
+ament_target_dependencies(patrol_client rclcpp turtle_interfaces)  #<-新增
+
+install(TARGETS status_listener DESTINATION lib/${PROJECT_NAME})
+install(TARGETS patrol_client DESTINATION lib/${PROJECT_NAME})  #<-新增
 ```
 
 ---
