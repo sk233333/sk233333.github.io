@@ -130,12 +130,11 @@ gedit ~/xwg/turtle_ws/src/py_turtle_control/py_turtle_control/spawn_turtle.py
 这是"客户端"角色的最小示例：
   1) 等服务上线
   2) 发请求（带参数：坐标、角度、名字）
-  3) 等响应（拿到新海龟的名字）
+  3) 通过回调处理响应（拿到新海龟的名字）
 """
 import rclpy
 from rclpy.node import Node
 from turtlesim.srv import Spawn      # turtlesim 自带的服务接口
-
 
 class SpawnTurtle(Node):
     def __init__(self):
@@ -169,27 +168,33 @@ class SpawnTurtle(Node):
 
         # ---- 发送请求，拿到一个"未来结果" future ----
         self.future_ = self.client_.call_async(request)
+
+        # ---- 关键：给 future 挂一个"完成回调" ----
+        # 服务端一回应，rclpy 会在 spin 时自动调用这个回调，无需手动轮询 done()
+        self.future_.add_done_callback(self._spawn_callback)
+
         self.get_logger().info(f'已发送创建请求：{name} 在 ({x}, {y})')
 
+    def _spawn_callback(self, future):
+        """服务端响应后自动触发：解析响应并打印新海龟的名字"""
+        try:
+            response = future.result()          # 取结果（若服务端报错会抛异常）
+            self.get_logger().info(f'创建成功，海龟名字：{response.name}')
+        except Exception as e:
+            self.get_logger().error(f'服务调用失败：{e}')
+        # 拿到结果后主动停掉 spin，main 里的 rclpy.spin 会自然返回
+        raise SystemExit
 
 def main(args=None):
     rclpy.init(args=args)
     node = SpawnTurtle()
 
-    # ---- 等响应：不断 spin，直到 future 完成 ----
-    while rclpy.ok():
-        rclpy.spin_once(node)                 # 处理一次通信，让回调跑起来
-        if node.future_.done():               # 服务端回应了
-            try:
-                response = node.future_.result()
-                node.get_logger().info(f' 创建成功，海龟名字：{response.name}')
-            except Exception as e:
-                node.get_logger().error(f'服务调用失败：{e}')
-            break
-
-    node.destroy_node()
-    rclpy.shutdown()
-
+    # ---- 回调里会 raise SystemExit 结束 spin ----
+    try:
+        rclpy.spin(node)
+    finally:
+        node.destroy_node()
+        rclpy.shutdown()
 
 if __name__ == '__main__':
     main()
@@ -204,13 +209,34 @@ if __name__ == '__main__':
 | `wait_for_service(timeout_sec=1.0)` | 必须等服务端上线。turtlesim 没启动的话，这个服务不存在，直接请求会失败 |
 | `Spawn.Request()` | 服务类型里有个内部类 `Request`，实例化后填请求字段 |
 | `call_async(request)` | 异步发送，立刻返回一个 future 对象，不阻塞 |
-| `future.done()` | 查询"服务端回应了没有" |
+| `future.add_done_callback(cb)` | 给 future 挂"完成回调"。服务端一回应，rclpy 在 spin 时自动调用回调，无需手动轮询 |
 | `future.result()` | 拿到响应对象，里面有 `.name` 等响应字段 |
-| `rclpy.spin_once(node)` | 只处理一次通信事件就返回，配合 while 循环等待——这是客户端等响应的标准写法 |
+| `rclpy.spin_once(node)` | 持续处理通信事件，直到节点被关闭；回调在 spin 过程中自动触发 |
 
-> 为什么不用 `call()` 同步调用？
-> 同步调用会彻底阻塞线程，期间连日志都打不出来。
-> 异步 + `spin_once` 循环是 ROS2 推荐的客户端写法。
+#### 1.为什么不用`call()` 同步调用？
+
+
+同步调用会彻底阻塞线程，期间连日志都打不出来。
+
+
+异步 + 回调是 ROS2 推荐的客户端写法。
+
+
+
+#### 2.为什么不用`spin_once` +`while` 轮询？
+
+
+手写`spin_once` 循环去轮询`future.done()` 也能跑，但属于"忙等待"，既啰嗦又占用 CPU。
+
+
+注册`add_done_callback` 让 rclpy 在 spin 时自动回调，语义更清晰、更省资源。
+
+
+#### 3.回调里为什么要`raise SystemExit` ？
+
+
+`rclpy.spin(node)` 直接返回，配合`main` 里的`try/finally` ，保证节点一定被销毁、`rclpy` 一定被关闭。
+如果这个节点之后还要继续发请求，就别 raise，改用标志位或`rclpy.shutdown()` 控制退出。
 
 ---
 
@@ -221,6 +247,8 @@ if __name__ == '__main__':
 gedit ~/xwg/turtle_ws/src/py_turtle_control/py_turtle_control/patrol_server.py
 ```
 
+
+### 以下是patrol_server.py的完整代码
 ```python
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
