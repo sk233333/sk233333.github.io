@@ -14,7 +14,7 @@ export const siteConfig: SiteConfig = {
   themeColor: { hue: 250, fixed: false },
   banner: {
     enable: true,
-    src: "/image/back.jpg",
+    src: "/image/backc.jpg",
     position: "center",
     credit: { enable: false, text: "", url: "" },
   },
