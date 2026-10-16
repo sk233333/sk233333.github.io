@@ -2,7 +2,7 @@
 title: "ROS2 服务+TF 项目-小乌龟随机巡逻与坐标系可视化详解"
 published: 2026-10-15
 description: "在上一个话题项目基础上，引入 ROS2 第二种通信方式：服务（Service），并让 RViz2 实时看到两只海龟的坐标系"
-image: "/image/xwg_srv/p0.png"
+image: "/image/xwg_srv/p20-1.jpg"
 category: "ROS2学习日常"
 draft: false
 tags: [ROS2, PYTHON, C++, 服务, TF, 小乌龟, 四元数, RViz2]
@@ -182,7 +182,7 @@ def main(args=None):
         if node.future_.done():               # 服务端回应了
             try:
                 response = node.future_.result()
-                node.get_logger().info(f'✅ 创建成功，海龟名字：{response.name}')
+                node.get_logger().info(f' 创建成功，海龟名字：{response.name}')
             except Exception as e:
                 node.get_logger().error(f'服务调用失败：{e}')
             break
@@ -326,7 +326,7 @@ class PatrolServer(Node):
             self.patrolling_ = False
             self.arrived_ = True
             self.cmd_pub_.publish(Twist())  # 发零速度刹车
-            self.get_logger().info(f'✅ 已到达目标点，误差 {distance:.3f}')
+            self.get_logger().info(f' 已到达目标点，误差 {distance:.3f}')
             return
 
         # ---- P 控制：误差越大，动作越大 ----
@@ -740,7 +740,7 @@ def generate_launch_description():
         name='tf_broadcaster', output='screen',
         parameters=[{'parent_frame': 'world'}])
 
-    # ⚠️ 关键原则：每个 Node 变量只能出现一次！
+    #  关键原则：每个 Node 变量只能出现一次！
     # 要么直接放进列表，要么包进 TimerAction，不能两边都写。
     return LaunchDescription([
 
@@ -830,7 +830,7 @@ ros2 launch py_turtle_control turtles_patrol.launch.py
 你会看到：
 - turtle1 在转圈
 - 3 秒后 turtle2 出现
-- 终端打印：`收到巡逻请求：目标 (x, y)` → `巡逻中：距目标 ...` → `✅ 已到达目标点`
+- 终端打印：`收到巡逻请求：目标 (x, y)` → `巡逻中：距目标 ...` → `已到达目标点`
 - turtle2 每 8 秒换一个点随机走
 
 ### 10.2 验证两只海龟的 TF 都在
@@ -852,9 +852,9 @@ rviz2
 1. 左侧 **Global Options → Fixed Frame** 改成 **`world`**
 2. 左下角 **Add → TF → OK**
 3. TF 设置里勾选：
-   - ✅ Show Axes（看红绿蓝三根轴）
-   - ✅ Show Names（看名字）
-   - ✅ Show Arrows（看父子连线）
+   - Show Axes（看红绿蓝三根轴）
+   - Show Names（看名字）
+   - Show Arrows（看父子连线）
    - **Marker Scale = 1**
 
 效果：两只海龟各自带一个坐标轴，turtle2 移动时它的轴会**平移 + 旋转**跟着动。
