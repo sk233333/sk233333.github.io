@@ -17,7 +17,7 @@ export const siteConfig: SiteConfig = {
 	},
 	banner: {
 		enable: true,                           // ← 原写 ture，拼写错误
-		src: "/image/back.jpg",                // ← 以 / 开头，指向 public/image/back.jpg
+		src: "/image/back1.jpg",                // ← 以 / 开头，指向 public/image/back.jpg
 		position: "center",
 		credit: {
 			enable: false,
