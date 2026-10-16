@@ -214,6 +214,7 @@ if __name__ == '__main__':
 
 ---
 
+
 ## 5. 第三步：巡逻服务端（Python，闭环控制海龟走路）
 
 ```bash
@@ -411,6 +412,8 @@ cmd_pub.publish(cmd)             # ④ 发布控制，回到①
 gedit ~/xwg/turtle_ws/src/cpp_status_listener/src/patrol_client.cpp
 ```
 
+
+### 以下是客户端C++的代码
 ```cpp
 // =====================================================================
 // 节点：patrol_client —— C++ 编写的【客户端】
@@ -557,20 +560,26 @@ int main(int argc, char ** argv)
 
 ## 7. 第五步：TF 广播——让 RViz2 看到坐标系跟着动
 
+
 这一步是**上一篇话题项目里没有的**。核心认知：
+
 
 > **`/pose` 是数据，`/tf` 是坐标关系。**
 > turtlesim 只发 `/pose`，不会自动把它声明成坐标系。
 > 这个"桥接"工作必须自己写。
 
+
 ### 7.1 为什么要理解四元数
+
 
 turtlesim 的 `pose.theta` 是一个**朝向角**（绕 Z 轴转了多少弧度）。
 要广播成 TF，必须把它转成**四元数**。四元数的几何含义：
 
+
 - `w = cos(θ/2)` —— 编码"转了多少"
 - `(x, y, z) = 轴方向 × sin(θ/2)` —— 编码"绕哪根轴转"
 - turtle2 只在二维平面转，所以只有 **z 分量非零**，x、y 恒为 0
+
 
 ```python
 half = theta / 2.0
@@ -578,12 +587,15 @@ q.z = sin(half)
 q.w = cos(half)
 ```
 
+
 ### 7.2 tf_broadcaster.py
 
 ```bash
 gedit ~/xwg/turtle_ws/src/py_turtle_control/py_turtle_control/tf_broadcaster.py
 ```
 
+
+#### 以下是tf_broadcaster.py的代码
 ```python
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
@@ -665,7 +677,9 @@ if __name__ == '__main__':
     main()
 ```
 
+
 ### 7.3 QoS 这个坑必须讲清
+
 
 这是本篇最容易踩的坑，值得单独说：
 
@@ -686,6 +700,7 @@ sensor_qos = QoSProfile(
 
 ---
 
+
 ## 8. 第六步：launch 一键拉起
 
 ### 8.1 turtles_patrol.launch.py
@@ -695,6 +710,7 @@ mkdir -p ~/xwg/turtle_ws/src/py_turtle_control/launch
 gedit ~/xwg/turtle_ws/src/py_turtle_control/launch/turtles_patrol.launch.py
 ```
 
+#### 以下是turtles_patrol.launch.py代码
 ```python
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
@@ -800,6 +816,7 @@ install(TARGETS patrol_client DESTINATION lib/${PROJECT_NAME})
 
 ---
 
+
 ## 9. 编译
 
 ```bash
@@ -811,7 +828,8 @@ source install/setup.bash
 
 看到 `Summary: 3 packages finished` 就成功了。
 
-验证服务接口生成成功：
+
+### 验证服务接口生成成功：
 ```bash
 ros2 interface show turtle_interfaces/srv/Patrol
 ```
@@ -819,7 +837,9 @@ ros2 interface show turtle_interfaces/srv/Patrol
 
 ---
 
+
 ## 10. 运行与 TF 可视化
+
 
 ### 10.1 一键启动
 
@@ -833,6 +853,11 @@ ros2 launch py_turtle_control turtles_patrol.launch.py
 - 终端打印：`收到巡逻请求：目标 (x, y)` → `巡逻中：距目标 ...` → `已到达目标点`
 - turtle2 每 8 秒换一个点随机走
 
+
+![858-xwg_service](/image/xwg_node/p20-2.png)
+
+
+
 ### 10.2 验证两只海龟的 TF 都在
 
 ```bash
@@ -841,6 +866,7 @@ ros2 topic echo /tf
 
 应该同时看到 `child_frame_id: turtle1` 和 `child_frame_id: turtle2`，
 且坐标都在实时变化。
+
 
 ### 10.3 RViz2 里看坐标系跟着动
 
@@ -858,6 +884,9 @@ rviz2
    - **Marker Scale = 1**
 
 效果：两只海龟各自带一个坐标轴，turtle2 移动时它的轴会**平移 + 旋转**跟着动。
+![887-xwg_service](/image/xwg_node/p20-3.png)
+
+
 
 ### 10.4 顺手补一个 world 根帧（可选但规范）
 
@@ -880,6 +909,7 @@ map          ← 真正的根（由 static_transform_publisher 显式发布）
 
 ---
 
+
 ## 11. 调试命令速查
 
 ```bash
@@ -896,6 +926,7 @@ ros2 run tf2_tools view_frames       # 把 TF 树导出成 frames.pdf
 > `ros2 service call` 这条特别有用——服务端写好后，不用等客户端就能单独验证它对不对。
 
 ---
+
 
 ## 12. 两个最容易踩的坑
 
