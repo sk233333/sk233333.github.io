@@ -9,7 +9,7 @@ import { LinkPreset } from "./types/config";
 
 export const siteConfig: SiteConfig = {
 	title: "sk",
-	subtitle: "Demo Site",
+	subtitle: "this is my blog",
 	lang: "zh_CN",
 	themeColor: {
 		hue: 250,
@@ -48,7 +48,7 @@ export const navBarConfig: NavBarConfig = {
 export const profileConfig: ProfileConfig = {
 	avatar: "/123.jpg",                        // ← 以 / 开头，指向 public/123.jpg
 	name: "sk",
-	bio: "hahaha",
+	bio: "e",
 	links: [
 		{
 			name: "GitHub",
@@ -70,5 +70,5 @@ export const licenseConfig: LicenseConfig = {
 };
 
 export const expressiveCodeConfig: ExpressiveCodeConfig = {
-	theme: "github-dark",
+	theme: "one-dark-pro",
 };
