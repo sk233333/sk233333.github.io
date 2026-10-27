@@ -1,84 +1,114 @@
 ---
-title: "ROS2 差速小车建图导航 - 从地图扭曲到精准对齐的排坑实录"
+title: "ROS2 差速小车建图导航：从地图扭曲到点云与墙完全重合"
 published: 2026-10-24
-description: "用 Gazebo + slam_toolbox + Nav2 建图导航时，我踩了 9 个坑：地图变形、锯齿、误闭环、瞬移、位置差 5 米…这篇带你一个个定位并修掉"
+description: "Gazebo + slam_toolbox + Nav2 实录：12 个坑逐一拆解——地图变形、锯齿墙、误闭环、位姿瞬移、map→odom 差 5 米、EKF 抢 TF、扫描匹配关掉后墙变厚。每个坑都给现象、根因、定位命令和验证标准。"
 image: "/image/robot_slam/p0.png"
 category: "ROS2学习日常"
 draft: false
-tags: [ROS2, GAZEBO, SLAM, NAV2, slam_toolbox, 建图, 导航, 里程计标定]
+tags: [ROS2, GAZEBO, SLAM, NAV2, slam_toolbox, 建图, 导航, 里程计标定, robot_localization, EKF]
 ---
 
 # 从"建出来的图和实际完全对不上"到"点云与墙完全重合"
 
-这篇文章记录我在用 **Gazebo 仿真 + slam_toolbox 建图 + Nav2 导航** 时踩过的 9 个坑。
+> **一句话结论：地图不对，先怀疑里程计，再怀疑 SLAM。**
+>
+> 这篇文章记录我用 **Gazebo 11 + ROS2 Humble + slam_toolbox + Nav2** 建图导航时踩过的 12 个坑。
+> 我一开始一直在调 SLAM 参数（闭环门槛、扫描阈值），越调越乱；直到把 `wheel_separation` 修对、把里程计标定完，问题才一次性全部消失。
 
-先说结论：**这些坑 90% 都不是 slam_toolbox 的锅**，而是里程计标定、坐标系、参数同步、插件加载这些"周边"问题。我一开始一直在调 SLAM 参数，越调越乱，直到回头把里程计修对，一切才通。
+**读完你会得到：**
 
-![ros2slam](/image/robot_slam/p0.png)
+- 一张"症状 → 最可能原因"的速查表，遇到问题 30 秒能定位方向
+- 每个坑的定量分析（为什么会这样、错多少、误差怎么算）
+- 可直接抄的配置、脚本和验证命令
+- 一条不会迷路的排查顺序
 
 ---
 
-## 0. 九个坑一览表（先有个全局印象）
+## 目录
 
-| # | 现象 | 真正原因 | 解法 |
+- [12 个坑速览](#坑速览)
+- [0. 环境确认](#env)
+- [1. 机器人模型：三个必看点](#model)
+- [2. 坑 1｜控制器参数与 URDF 不一致](#pit1)
+- [3. 坑 2｜运动畸变：锯齿墙](#pit2)
+- [4. 坑 3｜误闭环：车"瞬移"到隔壁房间](#pit3)
+- [5. 坑 4｜建图快完成时崩溃](#pit4)
+- [6. 坑 5｜拿不到 Gazebo 真值：插件类型错了](#pit5)
+- [7. 坑 6｜里程计标定（核心）](#pit6)
+- [8. 坑 7｜`map→odom` 硬编码成 0，导航差 5 米](#pit7)
+- [9. 坑 8、9｜Nav2 启动失败的两个经典错误](#pit8)
+- [10. 补坑 10～12｜仿真是"太干净"也是坑](#pit10)
+- [11. 完整启动流程](#flow)
+- [12. 容易忽略的细节清单](#details)
+- [13. 排查顺序](#order)
+- [附录｜一键诊断脚本](#diag)
+
+---
+
+<a id="坑速览"></a>
+## 12 个坑速览（原 9 个 + 后来补的 3 个）
+
+| # | 现象 | 真正原因 | 一句话解法 |
 |---|---|---|---|
 | 1 | 地图变形、墙不闭合、房间拼不成直角 | `wheel_separation` 与 URDF 不一致（0.34 vs 0.26，差 31%） | 改成 0.26 |
-| 2 | 墙是锯齿状 | 运动畸变：雷达 10Hz，转弯 0.8 rad/s，一帧内车转了 4.6° | turn 降到 0.20 |
-| 3 | 车在左边房间，地图上突然定位到右边 | 误闭环，响应门槛 `0.1` 太低 | 提到 0.50 / 0.60 |
-| 4 | 建图"快完成时就崩" | 资源累积到临界点 + 闭环优化瞬时峰值 | 无 GUI + 自动存图 |
+| 2 | 墙是锯齿状、双层描边 | 运动畸变：雷达 10 Hz，转弯 0.8 rad/s，一帧内车转了 4.6° | turn 降到 0.20 |
+| 3 | 车在左房间，地图上突然定位到右房间 | 误闭环，响应门槛 `0.1` 太低 | 提到 0.50 / 0.60 |
+| 4 | 建图"快完成时就崩" | 资源累积到临界点 + 闭环优化瞬时峰值 | 关 GUI + 定时存图 |
 | 5 | 拿不到 Gazebo 真值话题 | `libgazebo_ros_state.so` 是 WorldPlugin，不能用 `-s` 加载 | 写进 world 文件 |
 | 6 | 车一转点云就扭曲 | 里程计不准（转弯角度算错） | 用 multiplier 标定 |
 | 7 | 导航时车在地图上差 5 米 | `map→odom` 被硬编码成 0 | 填实测值（yaw 用弧度） |
 | 8 | `Transition is not registered` | 上次的 Nav2 没杀干净，节点重复 | 精确 kill Nav2 |
-| 9 | `Node not recognized: RecoveryNode` | BT 插件清单缺项 | 同步官方 plugin_lib_names |
+| 9 | `Node not recognized: RecoveryNode` | BT 插件清单缺项 | 同步官方 `plugin_lib_names` |
+| **10** | **slam 位姿周期性跳 7 米，地图忽大忽小** | **`odom→base_footprint` 有两个发布者** | **开 EKF 时关掉控制器的 odom TF** |
+| **11** | **墙被画厚，占据率翻倍（15.4% vs 5.5%）** | **`use_scan_matching: false`** | **在有里程计误差时必须打开** |
+| **12** | **机器人在地图上"消失"、Nav2 报 `frame does not exist`** | **两套 nav2 / 两套 odom 同时跑** | **同一时刻只留一套** |
 
 ---
 
-## 1. 环境检测
+<a id="env"></a>
+## 0. 环境确认
 
 ```bash
 ros2 topic list
 ```
 
-能正常输出（哪怕空列表）说明 ROS2 环境生效。我用的是 **Humble + Gazebo 11（classic）**。
-
-### 确认关键包都在
+能正常输出（哪怕空列表）说明 ROS2 环境生效。我用的组合是 **Humble + Gazebo 11（classic）**。
 
 ```bash
-ros2 pkg list | grep -E "slam_toolbox|nav2_bringup|gazebo_ros2_control|diff_drive_controller"
+# 关键包自检
+ros2 pkg list | grep -E "slam_toolbox|nav2_bringup|gazebo_ros2_control|diff_drive_controller|robot_localization"
 ```
 
 缺哪个装哪个：
 
 ```bash
-sudo apt install ros-humble-slam-toolbox \
-                 ros-humble-nav2-bringup \
-                 ros-humble-gazebo-ros2-control \
-                 ros-humble-ros2-controllers -y
+sudo apt install -y ros-humble-slam-toolbox \
+                    ros-humble-nav2-bringup \
+                    ros-humble-gazebo-ros2-control \
+                    ros-humble-ros2-controllers \
+                    ros-humble-robot-localization
 ```
+
+> 注意：ROS2 的很多"DDS 抽风"其实是发现不稳。本机调试可以加
+> `export ROS_LOCALHOST_ONLY=1`，少一半莫名其妙的问题。
 
 ---
 
-## 2. 机器人模型（xacro）—— 三个必须注意的点
+<a id="model"></a>
+## 1. 机器人模型（xacro）：三个必看点
 
 ### ① 雷达不要加 `collision`
 
 ```xml
 <link name="lidar_link">
-  <inertial>
-    <origin xyz="0 0 0" rpy="0 0 0"/>
-    <mass value="0.1"/>
-    <inertia ixx="0.0001" ixy="0" ixz="0" iyy="0.0001" iyz="0" izz="0.0001"/>
-  </inertial>
   <visual>
     <geometry><cylinder radius="0.03" length="0.04"/></geometry>
-    <material name="blue"><color rgba="0.2 0.4 0.9 1.0"/></material>
   </visual>
-  <!-- ★ 关键：不加 collision，否则激光射线打到自己，/scan 全是 0.1 米 -->
+  <!-- ★ 关键：不加 collision，否则激光射线打到自己，/scan 全是 0.12 米 -->
 </link>
 ```
 
-如果雷达扫出来全是近距离值，第一件事就是检查这里。
+**如果 `/scan` 全是近距离值，第一件事就查这里。**
 
 ### ② `rpy="0 0 0"` 保证扫描平面水平
 
@@ -86,12 +116,12 @@ sudo apt install ros-humble-slam-toolbox \
 <joint name="lidar_joint" type="fixed">
   <parent link="base_link"/>
   <child  link="lidar_link"/>
-  <!-- 世界 z = 0.05 + 0.11 = 0.16，rpy=0 保证扫描平面水平 -->
+  <!-- 世界 z = 0.05 + 0.11 = 0.16，rpy=0 保证扫描面水平 -->
   <origin xyz="0.10 0 0.11" rpy="0 0 0"/>
 </joint>
 ```
 
-rpy 不为 0 的话，扫描面会倾斜，打到地面或天花板，地图会莫名多出一圈障碍。
+rpy 不为 0，扫描面会倾斜，打到地面或天花板，地图上会莫名多出一圈障碍。
 
 ### ③ Gazebo 插件必须放在 `</robot>` 之前
 
@@ -106,47 +136,47 @@ rpy 不为 0 的话，扫描面会倾斜，打到地面或天花板，地图会�
 </gazebo>
 ```
 
-放错位置插件不加载，控制器就永远起不来。
+放错位置插件不加载，控制器永远起不来。
 
-### 轮距和轮半径（后面标定的基准）
+### 轮距与轮半径（后面标定的基准）
 
 ```xml
-<xacro:property name="wheel_radius"      value="0.05"/>
-<xacro:property name="wheel_separation"  value="0.26"/>
+<xacro:property name="wheel_radius"     value="0.05"/>
+<xacro:property name="wheel_separation" value="0.26"/>
 ```
 
 驱动轮 joint 的 y 偏移是 `${reflect * wheel_separation/2}`，所以左轮 y=+0.13、右轮 y=−0.13，**轮距 = 0.26**。
 
 ---
 
-## 3. 坑 1：控制器参数与 URDF 不一致 —— 地图变形的元凶 ⭐⭐⭐
+<a id="pit1"></a>
+## 2. 坑 1｜控制器参数与 URDF 不一致 —— 地图变形的元凶 ⭐⭐⭐
 
 ### 现象
 
-墙拼不成直角、房间是梯形、绕一圈首尾对不上产生双线重影。
+墙拼不成直角、房间是梯形、绕一圈首尾对不上，出现双线重影。
 
-### 诊断（30 秒）
+### 30 秒定位
 
 ```bash
-# 对比两个文件里的值
 grep -E "wheel_separation|wheel_radius" \
   ~/robot_ws/src/my_robot_description/urdf/robot.urdf.xacro
 grep -E "wheel_separation|wheel_radius" \
   ~/robot_ws/install/my_robot_description/share/my_robot_description/config/robot_controllers.yaml
 ```
 
-我当时是：
+我当时的值：
 
 | 参数 | URDF | yaml | 偏差 |
 |---|---|---|---|
 | `wheel_radius` | 0.05 | 0.05 | ✅ |
 | **`wheel_separation`** | **0.26** | **0.34** | ❌ **差 31%** |
 
-**0.34 是旧模型的轮距**（旧轮子在 y=±0.17）。我改了模型却忘了同步控制器。
+**0.34 是旧模型的轮距**（旧轮子在 y=±0.17）。模型改了，控制器忘了同步。
 
 ### 为什么会毁掉地图
 
-差速车转弯角度靠这个算：
+差速车的转角是靠轮距算出来的：
 
 ```
 转过的角度 θ = (右轮位移 − 左轮位移) / 轮距
@@ -154,12 +184,12 @@ grep -E "wheel_separation|wheel_radius" \
                         这里用的是 0.34，真实是 0.26
 ```
 
-车实际转 100°，里程计只记 **76.5°**（0.26/0.34）。
+车实际转 100°，里程计只记 **76.5°**（0.26 ÷ 0.34）。
 
 | 后果 | 表现 |
 |---|---|
-| 转弯角度系统性偏小 | 每个弯都"欠转"，累积后整个地图被扭曲 |
-| 墙拼不成直角 | 房间建出来是斜的/梯形 |
+| 转弯角度系统性偏小 | 每个弯都"欠转"，误差累积 |
+| 墙拼不成直角 | 房间建出来是斜的、梯形 |
 | 绕一圈回不到原点 | 首尾对不上 → 双线重影 |
 
 ### 修法
@@ -182,8 +212,6 @@ grep -E "wheel_separation" \
 让车原地转 90°，看 `odom→base_footprint` 的 yaw：
 
 ```bash
-ros2 run teleop_twist_keyboard teleop_twist_keyboard \
-  --ros-args -r cmd_vel:=/diff_drive_controller/cmd_vel_unstamped
 ros2 run tf2_ros tf2_echo odom base_footprint
 ```
 
@@ -194,68 +222,63 @@ ros2 run tf2_ros tf2_echo odom base_footprint
 
 ---
 
-## 4. 坑 2：运动畸变 —— 锯齿状墙
+<a id="pit2"></a>
+## 3. 坑 2｜运动畸变 —— 锯齿状墙
 
 ### 现象
 
-地图边缘是锯齿状、有"双层描边"。
+地图边缘锯齿状，或者有"双层描边"。
 
 ### 定量分析
 
-雷达 **10Hz**，一帧扫描耗时 **0.1 秒**。这 0.1 秒里车如果正在转弯：
+雷达 **10 Hz**，一帧扫描耗时 **0.1 秒**。这 0.1 秒里车如果正在转弯：
 
 ```
-一帧内转过的角度 = 转弯速度 × 0.1 秒
+一帧内转过的角度 = 角速度 × 0.1 s
 ```
 
-| 转弯速度 | 一帧内车转过 | 4m 外墙面被"抹歪" | 换算像素（0.05m/格） |
+| 转弯角速度 | 一帧内车转过 | 4 m 外墙面被"抹歪" | 换算格子（0.05 m/格） |
 |---|---|---|---|
 | **0.8 rad/s** | **4.6°** | **0.32 m** | **6.4 格** ⬅ 锯齿宽度 |
 | 0.4 rad/s | 2.3° | 0.16 m | 3.2 格 |
 | **0.2 rad/s** | 1.1° | 0.08 m | **1.6 格** ✅ |
 
-**0.32 ÷ 0.05 = 6.4 个格子** —— 正好是锯齿宽度。
+`0.32 ÷ 0.05 = 6.4`，正好等于你看到的锯齿宽度——数字对得上，说明病因判断正确。
 
-**原理**：激光扫一圈的过程中车已经转过去了，一帧点云里每个点都是在不同朝向时打的，拼起来自然成锯齿。
+**原理**：激光扫一圈的过程中车已经转过去了，一帧点云里每个点都是不同朝向时打的，拼起来自然成锯齿。
 
 ### 解法
 
 teleop 里按 **`c` 键 6 次**，把 turn 从 0.80 降到 **0.20**。
 
-配合**操作铁律**（比参数更重要）：
+更重要的是**操作铁律**（比参数更管用）：
 
 ```
 按 i 走到位置 → 按 k 停死 → 等 1 秒 → 按 l/j 慢慢转 → 按 k 停 → 等 1 秒 → 按 i 继续
 ```
 
-**绝不允许边走边转** —— 平移+旋转叠加时畸变最严重，光降 turn 也救不回来。
+**绝不允许边走边转。** 平移和旋转叠加时畸变最严重，光降 turn 也救不回来。
 
 ### 按键速查
 
-```
-      u    i    o
-      j    k    l
-      m    ,    .
-```
-
 | 键 | 作用 |
 |---|---|
-| `i` | 前进 |
-| `,` | 后退 |
+| `i` / `,` | 前进 / 后退 |
 | `j` / `l` | 左转 / 右转 |
 | **`k`** | **停止（转弯前后必按）** |
-| `z` / `q` | 总速度 减/加 |
-| `c` / `e` | 转角速度 减/加 |
+| `z` / `q` | 总速度 减 / 加 |
+| `c` / `e` | 角速度 减 / 加 |
 
-**开局必做**：`z`×4 → speed 0.30，`c`×6 → turn 0.20
+**开局必做**：`z`×4 → speed 0.30，`c`×6 → turn 0.20。
 
 ---
 
-## 5. 坑 3：误闭环 —— 车瞬移到隔壁房间
+<a id="pit3"></a>
+## 4. 坑 3｜误闭环 —— 车"瞬移"到隔壁房间
 
 ### 现象
 
-车明明在左边房间，地图上的红色标记突然跳到右边房间。Gazebo 里车纹丝不动。
+车明明在左边房间，地图上的红色标记突然跳到右边房间，Gazebo 里车纹丝不动。
 
 ### 原理
 
@@ -272,36 +295,34 @@ slam_toolbox 把**当前扫描**和**历史扫描**做匹配。两个房间都�
 | X 平移 | **−4.983 m** | 巨大的横向位移 |
 | 旋转 | 11.356° | 几乎没转 |
 
-**"≈5 米的纯 X 平移 + 几乎不旋转"** = 把左房间匹配成右房间（两房间沿 X 轴并列）。
+**"≈5 米的纯 X 平移 + 几乎不旋转"** = 把左房间匹配成了右房间（两个房间沿 X 轴并列）。
 
 ### 解法：提高响应门槛 ⭐
 
-我原来的配置：
+问题出在这两行：
 
 ```yaml
-loop_match_minimum_response_coarse: 0.1   # ❌ 太低！几乎随便什么都能匹配
+loop_match_minimum_response_coarse: 0.1   # ❌ 太低，几乎随便什么都能匹配
 loop_match_minimum_response_fine: 0.1     # ❌
 ```
 
-**这才是误闭环的直接原因**。改成：
+改成：
 
 ```yaml
-slam_toolbox:
-  ros__parameters:
-    do_loop_closing: true
-    loop_search_maximum_distance: 3.0          # 4.0 → 3.0，只和近处匹配
-    loop_match_minimum_chain_size: 15          # 10 → 15，需要更长证据链
-    loop_match_minimum_response_coarse: 0.50   # ★ 0.1 → 0.50
-    loop_match_minimum_response_fine: 0.60     # ★ 0.1 → 0.60
+do_loop_closing: true
+loop_search_maximum_distance: 3.0          # 4.0 → 3.0，只和近处匹配
+loop_match_minimum_chain_size: 15          # 10 → 15，需要更长证据链
+loop_match_minimum_response_coarse: 0.50   # ★ 0.1 → 0.50
+loop_match_minimum_response_fine: 0.60     # ★ 0.1 → 0.60
 ```
 
-小房间如果还出问题，直接关掉：
+小房间或自相似环境如果还出问题，**直接关掉**：
 
 ```yaml
-    do_loop_closing: false
+do_loop_closing: false
 ```
 
-25 米的绕行路线，里程计精度完全够，不需要闭环。
+20~25 米的绕行路线，标定过的里程计精度完全够，不需要闭环。
 
 ### 完整 `slam_params.yaml`
 
@@ -325,10 +346,10 @@ slam_toolbox:
     map_update_interval: 1.0
     publish_period: 0.05
 
-    max_laser_range: 10.0
+    max_laser_range: 10.0          # ★ 要和 xacro 里的 <max> 一致
     minimum_time_interval: 0.2
-    minimum_travel_distance: 0.30      # ★ 社区建议 0.3~0.5，太小噪声全进图
-    minimum_travel_heading: 0.30       # ★ 容易漏
+    minimum_travel_distance: 0.30  # ★ 社区建议 0.3~0.5，太小噪声全进图
+    minimum_travel_heading: 0.30   # ★ 容易漏写
 
     solver_plugin: solver_plugins::CeresSolver
     ceres_linear_solver: SPARSE_NORMAL_CHOLESKY
@@ -345,6 +366,7 @@ slam_toolbox:
     loop_match_minimum_response_coarse: 0.50
     loop_match_minimum_response_fine: 0.60
 
+    # ===== 扫描匹配（见坑 11，有里程计误差时必须开）=====
     use_scan_matching: true
     use_scan_barycenter: true
     minimum_angle_change: 0.001
@@ -362,11 +384,12 @@ slam_toolbox:
 
 ---
 
-## 6. 坑 4：建图"快完成时就崩"
+<a id="pit4"></a>
+## 5. 坑 4｜建图"快完成时就崩"
 
 ### 原因
 
-不是随机崩溃，是**数据积累到临界点的必然结果**：
+不是随机崩溃，是**数据累积到临界点的必然结果**：
 
 | 累积项 | 增长规律 |
 |---|---|
@@ -378,7 +401,7 @@ slam_toolbox:
 
 ### 三招组合
 
-**① `gui:=false` 关掉 Gazebo 窗口**（省 30~50% 内存，RViz 里都能看到）
+**① 关掉 Gazebo 窗口**（省 30~50% 内存，RViz 里照样能看）
 
 ```bash
 ros2 launch my_robot_description gazebo.launch.py gui:=false
@@ -388,11 +411,11 @@ ros2 launch my_robot_description gazebo.launch.py gui:=false
 
 | 设置 | 改成 |
 |---|---|
-| LaserScan → Decay Time | **`0`** ⭐（这是最吃内存的） |
+| LaserScan → Decay Time | **`0`** ⭐ 这是最吃内存的 |
 | Grid / TF | 取消勾选 |
 | Global Options → Frame Rate | 30 → **10** |
 
-**③ 后台自动存图（保底，最重要）**
+**③ 定时自动存图（保底，最重要）**
 
 ```bash
 while true; do
@@ -406,7 +429,8 @@ done
 
 ---
 
-## 7. 坑 5：拿不到 Gazebo 真值 —— 插件类型错误
+<a id="pit5"></a>
+## 6. 坑 5｜拿不到 Gazebo 真值 —— 插件类型错了
 
 ### 现象
 
@@ -422,43 +446,23 @@ Gazebo 插件分三类，**加载方式完全不同**：
 | 类型 | 加载方式 | 例子 |
 |---|---|---|
 | **SystemPlugin** | `gzserver -s xxx.so` | `libgazebo_ros_init.so`（时钟）<br>`libgazebo_ros_factory.so`（spawn 服务） |
-| **WorldPlugin** | 写在 `.world` 的 `<world>` 里 | **`libgazebo_ros_state.so`** ⬅ 你的情况 |
+| **WorldPlugin** | 写在 `.world` 的 `<world>` 里 | **`libgazebo_ros_state.so`** ⬅ 这里 |
 | **ModelPlugin** | 写在 URDF 的 `<gazebo>` 里 | `libgazebo_ros2_control.so` |
 
-`libgazebo_ros_state.so` 是 **World 级插件** —— 它必须挂在一个具体的 world 上才能读到这个世界的模型列表。塞进 `-s`（SystemPlugin 位置）类型校验就失败。
+`libgazebo_ros_state.so` 是 **World 级插件**，必须挂在一个具体的 world 上才能读到这个世界里的模型列表。塞到 `-s`（SystemPlugin 的位置）类型校验直接失败。
 
 ### 修法：写进 world 文件
 
 ```xml
 <world name="default">
-    <plugin name="gazebo_ros_state" filename="libgazebo_ros_state.so">
-      <ros>
-        <namespace>/gazebo</namespace>
-      </ros>
-      <update_rate>10.0</update_rate>
-    </plugin>
-    ...
-```
-
-用命令插入：
-
-```bash
-cd ~/robot_ws
-python3 - << 'PY'
-p = 'src/my_robot_description/config/my_world.world'
-s = open(p).read()
-if 'libgazebo_ros_state.so' not in s:
-    s = s.replace('<world name="default">',
-        '<world name="default">\n'
-        '    <plugin name="gazebo_ros_state" filename="libgazebo_ros_state.so">\n'
-        '      <ros>\n'
-        '        <namespace>/gazebo</namespace>\n'
-        '      </ros>\n'
-        '      <update_rate>10.0</update_rate>\n'
-        '    </plugin>', 1)
-    open(p, 'w').write(s)
-    print('已插入')
-PY
+  <plugin name="gazebo_ros_state" filename="libgazebo_ros_state.so">
+    <ros>
+      <namespace>/gazebo</namespace>
+    </ros>
+    <update_rate>10.0</update_rate>
+  </plugin>
+  <!-- ... 其他内容 ... -->
+</world>
 ```
 
 重启 Gazebo 后验证：
@@ -466,20 +470,21 @@ PY
 ```bash
 ros2 topic list | grep gazebo
 # /gazebo/link_states
-# /gazebo/model_states     ← 有了才能读真值
+# /gazebo/model_states     ← 有它才能读真值
 ```
 
-### 备选：不用话题，用命令行
-
-如果上面嫌麻烦，直接用 `gz` 命令读真值，100% 能用：
+### 备选：不依赖话题，用命令行读真值
 
 ```bash
 gz model -m my_robot -p
 ```
 
+这条 100% 能用，不受 DDS 影响，做标定时非常好使。
+
 ---
 
-## 8. 坑 6：里程计标定 —— 车一转点云就扭曲 ⭐⭐⭐
+<a id="pit6"></a>
+## 7. 坑 6｜里程计标定 —— 车一转点云就扭曲 ⭐⭐⭐
 
 这是**最核心**的一坑。前面那些都是治标，这个才是治本。
 
@@ -490,26 +495,28 @@ pkill -9 -f slam_toolbox
 ```
 
 RViz 里：
-- **Fixed Frame 改成 `odom`**（不是 map）
-- 只显示 `LaserScan`（Decay Time=0）+ `RobotModel`
+
+- **Fixed Frame 改成 `odom`**（不是 `map`）
+- 只显示 `LaserScan`（Decay Time = 0）+ `RobotModel`
 
 开车转几圈：
 
 | 现象 | 结论 |
 |---|---|
-| 点云**始终贴合墙**、不跟着车转 | ✅ 里程计正常 |
-| 车一转，点云**跟着旋转/扭曲** | ❌ **里程计要标定** |
+| 点云**始终贴合墙**，不跟着车转 | ✅ 里程计正常 |
+| 车一转，点云**跟着旋转 / 扭曲** | ❌ 里程计要标定 |
 
-### 为什么光靠 URDF 尺寸不够
+### 为什么只靠 URDF 尺寸不够
 
-`wheel_separation: 0.26` 是 CAD 几何真值，但实际有：
+`wheel_separation: 0.26` 是 CAD 几何真值，但实际还有：
+
 - 轮胎打滑
 - 装配误差
 - 转弯时轮胎刮擦
 
 所以必须**实测标定**。
 
-### 官方提供了专门的标定参数 ⭐
+### 官方给了三个标定系数 ⭐
 
 | 参数 | 作用 | 默认 |
 |---|---|---|
@@ -521,10 +528,10 @@ RViz 里：
 
 ### 快速粗调：90° 测试（1 分钟）
 
-让车原地转 90°，看 odom 报多少度：
+让车原地转 90°，看 odom 报了多少度：
 
 ```
-wheel_separation_multiplier = 90 ÷ odom报的度数
+wheel_separation_multiplier = 90 ÷ odom 报的度数
 ```
 
 | odom 报的 | 系数 |
@@ -533,9 +540,11 @@ wheel_separation_multiplier = 90 ÷ odom报的度数
 | 70° | **1.286** |
 | 110° | 0.818 |
 
+> ⚠️ multiplier 只能修**缩放误差**（系统性偏大/偏小）。如果误差随速度、转向方向变化，那是打滑，标定救不了——见文末"仿真打滑"一节。
+
 ### 完整标定脚本
 
-自动开车、自动对比 `/odom` 与 Gazebo 真值、自动算系数写回配置：
+自动开车、自动对比 `/odom` 与 Gazebo 真值、自动算系数并写回配置：
 
 ```python
 #!/usr/bin/env python3
@@ -613,8 +622,8 @@ class Bot(Node):
             time.sleep(0.02)
 
 def rc(p):
-    o = {"wheel_separation_multiplier":1.0,"left_wheel_radius_multiplier":1.0,
-         "right_wheel_radius_multiplier":1.0}
+    o = {"wheel_separation_multiplier": 1.0, "left_wheel_radius_multiplier": 1.0,
+         "right_wheel_radius_multiplier": 1.0}
     try: s = open(p).read()
     except IOError: return o
     for k in o:
@@ -624,12 +633,13 @@ def rc(p):
 
 def wr(p, sp, rd):
     s = open(p).read()
-    for k, v in [("wheel_separation_multiplier",sp),("left_wheel_radius_multiplier",rd),
-                 ("right_wheel_radius_multiplier",rd)]:
+    for k, v in [("wheel_separation_multiplier", sp),
+                 ("left_wheel_radius_multiplier", rd),
+                 ("right_wheel_radius_multiplier", rd)]:
         line = f"    {k}: {v:.4f}"
         s, n = re.subn(rf"^[ \t]*{k}:.*$", line, s, flags=re.M)
-        if n == 0: s = s.replace("    wheel_radius:", line+"\n    wheel_radius:", 1)
-    open(p,"w").write(s)
+        if n == 0: s = s.replace("    wheel_radius:", line + "\n    wheel_radius:", 1)
+    open(p, "w").write(s)
 
 def main():
     ap = argparse.ArgumentParser()
@@ -735,8 +745,9 @@ diff_drive_controller:
     odom_frame_id: odom
     base_frame_id: base_footprint
     publish_odom: true
-    publish_odom_tf: true
-    publish_rate: 50.0          # ★ 必须 ≥50Hz（10Hz 会让地图持续扭曲）
+    publish_odom_tf: true      # ★ 没有 EKF 时由控制器发；有 EKF 时必须 false
+    enable_odom_tf: true       # ★ Humble 里真正管 TF 的是这个开关（见坑 10）
+    publish_rate: 50.0         # ★ 必须 ≥50Hz（10Hz 会让地图持续扭曲）
 
     cmd_vel_timeout: 1.0
     use_stamped_vel: false
@@ -773,7 +784,8 @@ diff_drive_controller:
 
 ---
 
-## 9. 坑 7：`map→odom` 被硬编码成 0 —— 导航时差 5 米 ⭐⭐⭐
+<a id="pit7"></a>
+## 8. 坑 7｜`map→odom` 硬编码成 0 —— 导航差 5 米 ⭐⭐⭐
 
 ### 现象
 
@@ -802,62 +814,69 @@ map→odom = [-4.983, 1.781, 11.356°]
 ros2 run tf2_ros tf2_echo map odom
 ```
 
-在看 TF 树时有个关键信号：
+看 TF 树的 `rate` 字段判断是谁在发：
 
 ```
 odom:
   parent: 'map'
-  rate: 10000.000        ← ⚠️ 静态变换的标志（动态 TF 是 50~100Hz）
+  rate: 10000.000     ← ⚠️ 静态变换的标志（动态 TF 是 50~100Hz）
 ```
 
-`rate: 10000` 说明发它的是 static_transform_publisher，不是 SLAM。
+`rate: 10000` 说明发它的是 `static_transform_publisher`，不是 SLAM。
 
-### 修法
+### 修法 A：填实测值（我当时用的）
 
 **① 在建图结束时（关 SLAM 之前）读值**
 
 ```bash
 ros2 run tf2_ros tf2_echo map odom
-```
-
-得到：
-```
-- Translation: [-0.012, 0.151, 0.000]
-- Rotation: in RPY (degree) [0.000, -0.000, 1.200]
+# Translation: [-0.012, 0.151, 0.000]
+# Rotation: in RPY (degree) [0.000, -0.000, 1.200]
 ```
 
 **② yaw 换算成弧度（最容易错的一步）**
 
 ```
-弧度 = 度 × 3.14159 / 180
+弧度 = 度 × π / 180
 1.200° → 0.0209 rad
 ```
 
 **③ 填进 `nav2.launch.py`**
 
 ```python
-    # ★ 建图结束时实测的 map→odom（yaw 用弧度！）
-    MAP_TO_ODOM_X   = '-0.012'
-    MAP_TO_ODOM_Y   = '0.151'
-    MAP_TO_ODOM_YAW = '0.0209'   # 1.200° × π/180
+MAP_TO_ODOM_X   = '-0.012'
+MAP_TO_ODOM_Y   = '0.151'
+MAP_TO_ODOM_YAW = '0.0209'   # 1.200° × π/180
 
-    static_tf = Node(
-        package='tf2_ros',
-        executable='static_transform_publisher',
-        name='map_to_odom',
-        output='screen',
-        arguments=[
-            '--x', MAP_TO_ODOM_X,
-            '--y', MAP_TO_ODOM_Y,
-            '--z', '0',
-            '--roll', '0', '--pitch', '0', '--yaw', MAP_TO_ODOM_YAW,
-            '--frame-id', 'map',
-            '--child-frame-id', 'odom',
-        ],
-    )
+static_tf = Node(
+    package='tf2_ros',
+    executable='static_transform_publisher',
+    name='map_to_odom',
+    output='screen',
+    arguments=[
+        '--x', MAP_TO_ODOM_X, '--y', MAP_TO_ODOM_Y, '--z', '0',
+        '--roll', '0', '--pitch', '0', '--yaw', MAP_TO_ODOM_YAW,
+        '--frame-id', 'map', '--child-frame-id', 'odom',
+    ],
+)
 ```
 
 > ⚠️ **切导航时只关 SLAM，不要重启 Gazebo** —— 重启会让 `odom` 归零、车回原点，你读的值就作废了。
+
+### 修法 B：直接交给 amcl（更推荐）
+
+静态 TF 只记录"建图结束那一刻"的偏移，车一动、里程计一漂就失效。正确做法是让 `amcl` 用激光实时发 `map→odom`：
+
+```python
+# map_server + amcl + lifecycle_manager 组成定位链
+# amcl 打开 set_initial_pose，给定初始位姿（或用 RViz 的 2D Pose Estimate）
+```
+
+代价是每次启动都要给一次初始位姿。**如果不给，amcl 会默认自己在 (0,0,0)**，而车实际可能在 1 米外——我遇到过 1.1 m / 158° 的偏差，代价地图直接错位。
+
+> `/initialpose` 有个隐形要求：**`header.stamp` 不能为 0**，否则 amcl 报
+> `Received initialpose message is malformed. Rejecting.`
+> 用脚本发时记得先等 `/clock`（`use_sim_time` 下没收到时钟前 `now()` 是 0）。
 
 ### 效果对比
 
@@ -870,7 +889,8 @@ ros2 run tf2_ros tf2_echo map odom
 
 ---
 
-## 10. 坑 8 & 9：Nav2 启动失败的两个经典错误
+<a id="pit8"></a>
+## 9. 坑 8、9｜Nav2 启动失败的两个经典错误
 
 ### ① `Transition is not registered`
 
@@ -886,12 +906,13 @@ Goal was rejected by server
 
 ```bash
 pkill -9 -f controller_server; pkill -9 -f planner_server
-pkill -9 -f bt_navigator; pkill -9 -f behavior_server
+pkill -9 -f bt_navigator;      pkill -9 -f behavior_server
 pkill -9 -f velocity_smoother; pkill -9 -f lifecycle_manager
-pkill -9 -f map_server; pkill -9 -f rviz2; pkill -9 -f slam_toolbox
-sleep 3; rm -rf /dev/shm/*cyclonedds* 2>/dev/null
+pkill -9 -f map_server;        pkill -9 -f rviz2
+pkill -9 -f slam_toolbox
+sleep 3
 
-echo "gzserver 存活: $(pgrep -c gzserver)"    # 必须是 1
+echo "gzserver 存活: $(pgrep -c gzserver)"   # 必须是 1
 ```
 
 ### ② `Node not recognized: RecoveryNode`
@@ -900,7 +921,7 @@ echo "gzserver 存活: $(pgrep -c gzserver)"    # 必须是 1
 Exception when loading BT: Error at line 7: -> Node not recognized: RecoveryNode
 ```
 
-**原因**：`plugin_lib_names` 清单缺了 `nav2_recovery_node_bt_node` 等项。
+**原因**：`plugin_lib_names` 清单缺项。
 
 **解法**：直接从官方文件同步（版本绝对匹配）
 
@@ -915,18 +936,104 @@ s = open(USR).read()
 m = re.search(r'( *)plugin_lib_names:\n((?: *- .*\n)+)', s)
 ind = m.group(1)
 block = f'{ind}plugin_lib_names:\n' + ''.join(f'{ind}  - {x}\n' for x in plugs)
-open(USR,'w').write(s[:m.start()] + block + s[m.end():])
+open(USR, 'w').write(s[:m.start()] + block + s[m.end():])
 print(f'已同步官方插件清单（{len(plugs)} 项）')
 PY
 ```
 
 **成功标志**：
+
 ```
 [lifecycle_manager_navigation]: Managed nodes are active     ⭐
 ```
 
 ---
 
+<a id="pit10"></a>
+## 10. 坑 10～12｜"仿真太干净"也是个坑
+
+这三条是后来加 IMU 和 EKF 之后才暴露的，前 9 个坑都修完也不一定碰到。
+
+### 坑 10｜`odom→base_footprint` 有两个发布者
+
+**现象**：slam 位姿周期性从"完全对齐"跳到偏差 7 米，`/map` 忽大忽小，甚至出现 `y=-5.6` 这种房间外的坐标。
+
+**根因**：Humble 的 `diff_drive_controller` 里真正管 TF 的参数是 **`enable_odom_tf`**，`publish_odom_tf` 只是别名。只关后者，控制器照样 50 Hz 发 TF，和 EKF 的 30 Hz 数据交替 → slam 每帧拿到的位姿在两个值之间跳。
+
+抓包就能看到同一时刻两条不同的值：
+
+```
+stamp=486.689  parent=odom  xyz=(2.106, -5.298)
+stamp=486.700  parent=odom  xyz=(1.318, -2.298)
+```
+
+**修法**：
+
+```yaml
+diff_drive_controller:
+  ros__parameters:
+    publish_odom: true        # 数据还要，给 EKF 当输入
+    publish_odom_tf: false
+    enable_odom_tf: false     # ★ 真正生效的那个
+```
+
+**验证**：`ros2 run tf2_ros tf2_echo odom base_footprint` 只应有一个稳定速率（EKF 的输出），不再来回跳。
+
+### 坑 11｜关掉扫描匹配，墙会被画厚一倍
+
+**现象**：地图结构全对，但墙线粗了一倍、边缘一圈散点。占据率 15.4%，而真值位姿建的同一条路线只有 6.2%。
+
+**根因**：`use_scan_matching: false` 是为"真值里程计"准备的——位姿完美时，匹配反而增加误匹配风险。可一旦换成 EKF，odom 每帧都有毫米级抖动；关掉匹配，slam 就退化成"按 odom 位姿逐帧盖印章"，抖动原样落到栅格上。
+
+**修法**：
+
+```yaml
+use_scan_matching: true    # ★ 有里程计误差时必须开
+```
+
+**实测对比**（同一条 31 航点路线）：
+
+| | 真值位姿建图 | EKF + 关匹配 | EKF + 开匹配 |
+|---|---|---|---|
+| 地图尺寸 | 158×118 | 161×120 | 157×117 |
+| 自由 | 80.2% | 72.4% | **79.9%** |
+| 未知 | 13.6% | 12.2% | **14.6%** |
+| 占据 | 6.2% | **15.4%** | **5.5%** |
+
+### 坑 12｜两套 nav2 / 两套 odom 同时跑
+
+**现象**：RViz 里机器人"消失"，RobotModel 变红；终端刷 `Invalid frame ID "odom" ... frame does not exist`；或者新启动的 nav2 报 `configure` 失败。
+
+**根因**：旧的一套没关，新的一套又起来 → 重名节点（两个 `map_server`、两个 `amcl`）互抢服务。新栈的 lifecycle_manager 一上来 configure 就撞车，`Failed to change state for node: controller_server`，bringup 直接中止 → amcl 停在 `unconfigured` → `map` 坐标系从来没发布过。
+
+**修法**：起之前先查，有残留就清：
+
+```bash
+ps -ef | grep -E "[n]av2_|[a]mcl|[e]kf_node|[r]viz2" | grep -v grep
+pkill -f nav2_ ; pkill -f amcl ; pkill -f ekf_node ; pkill -f rviz2
+```
+
+**铁律：同一时刻只允许一套 nav2、一个 `odom→base_footprint` 发布者、一个 `/map` 发布者。**
+
+### 顺带：仿真里的"打滑 40%"
+
+Gazebo 默认接触模型下，轮子纵向打滑可以到 40%（轮子转角累计 663 rad ≈ 33 m 轮面行程，车身实际只走十几米）。表现是 odom 虚增、地图被越走越"长"。
+
+三个层面处理：
+
+1. **摩擦参数**：轮子给 `<fdir1>1 0 0</fdir1><mu1>1.0</mu1><mu2>0.1</mu2>`，万向球给 `mu=0.01`（给 0 会让车转向时侧向漂移）
+2. **加 IMU + EKF**：yaw 由陀螺仪提供，不受打滑影响；位置仍靠轮速积分，只能削弱不能消除
+3. **只做验证时**：用 `/gazebo/model_states` 的真值做里程计，等于开挂，能立刻确认"图不对是定位的锅还是 SLAM 的锅"
+
+```bash
+# 三维度自检：真值 vs EKF vs 轮式
+gz model -m my_robot -p
+ros2 run tf2_ros tf2_echo odom base_footprint
+```
+
+---
+
+<a id="flow"></a>
 ## 11. 完整启动流程（照这个走）
 
 ### T1：仿真
@@ -946,14 +1053,17 @@ Spawn status: Successfully spawned entity [my_robot]                    ★
 [spawner_joint_state_broadcaster]: Configured and activated             ★
 ```
 
-### T2：SLAM
+### T2：定位 + SLAM
 
 ```bash
 source ~/robot_ws/install/setup.bash
-ros2 launch my_robot_description slam.launch.py
+ros2 launch my_robot_description slam_ekf.launch.py   # EKF + slam_toolbox
 ```
 
-### T3：自动存图
+> 没有 IMU 就用 `slam.launch.py`，让控制器自己发 `odom→base_footprint`（此时 `enable_odom_tf: true`）。
+> 两套只能用一套，绝不能同时开。
+
+### T3：定时存图
 
 ```bash
 while true; do
@@ -977,7 +1087,7 @@ ros2 run teleop_twist_keyboard teleop_twist_keyboard \
 | **Fixed Frame** | **`map`** |
 | RobotModel → Description Source | **`Topic`** / `/robot_description` |
 | LaserScan → Topic | `/scan`，**Decay Time = `0`** |
-| Add → Map → Topic | `/map` |
+| Add → Map → Topic | `/map`（Durability 设 **Transient Local**，否则图刷不出来） |
 | 关掉 | Grid、TF |
 
 ### 切导航
@@ -986,7 +1096,7 @@ ros2 run teleop_twist_keyboard teleop_twist_keyboard \
 # ① 先读 map→odom（在关 SLAM 之前！）
 ros2 run tf2_ros tf2_echo map odom
 
-# ② 填进 nav2.launch.py，colcon build
+# ② 用 amcl 定位（推荐），或把读到的值填进 nav2.launch.py
 
 # ③ 只关 SLAM
 pkill -9 -f slam_toolbox; sleep 2
@@ -997,32 +1107,35 @@ ros2 launch my_robot_description nav2.launch.py
 
 ### 最终验收标准 ⭐
 
-RViz 里 **Fixed Frame = `map`**，看：
+RViz 里 **Fixed Frame = `map`**，看一件事：
 
 > **激光点云是否与地图的黑墙完全重合**
 
-重合 = 全部搞定。差一点就微调那三个值，每次改 0.02。
+重合 = 全部搞定。差一点就微调那三个值，每次 0.02。
 
 ---
 
-## 12. 一些容易忽略的细节
+<a id="details"></a>
+## 12. 容易忽略的细节清单
 
 | 项 | 说明 |
 |---|---|
-| **spawn 高度** | `-z 0.05` 会让车悬空掉落弹跳，起步就打滑。改 `0.01` |
+| **spawn 高度** | `-z 0.05` 会让车悬空掉落弹跳，起步就打滑，改 `0.01` |
 | **雷达量程一致性** | `slam_params` 的 `max_laser_range` 要和 xacro 的 `<max>` 一致 |
 | **房间尺寸 vs 量程** | 房间对角线要 < 雷达量程，否则远端墙扫不到，只能靠里程计硬推 |
 | **src → install 同步** | 改完必 `colcon build`，再 grep install 目录确认 |
 | **控制器参数改了** | 必须重启 **Gazebo**，只重启 SLAM 无效 |
 | **建图/导航二选一** | 绝不能同时开，否则 `map→odom` 被两个源抢发 |
 | **同一区域别反复走** | 走太多遍，回环修正会把原本好的局部地图拉变形 |
+| **TF 只能有一个源** | 每个坐标系（尤其 `odom→base_footprint`）只允许一个发布者 |
 
 ---
 
-## 13. 总结：排查顺序（照这个来，不迷路）
+<a id="order"></a>
+## 13. 排查顺序（照这个来，不迷路）
 
 ```
-① 雷达正常吗？        /scan 有数据、打到东西 >60%、最远 4~9m
+① 雷达正常吗？        /scan 有数据、打到东西 >60%、最远 4~9 m
       ↓
 ② 控制器 active 吗？   ros2 control list_controllers
       ↓
@@ -1032,42 +1145,65 @@ RViz 里 **Fixed Frame = `map`**，看：
       ↓
 ⑤ 标定好了吗？        跑 auto_calib.py，误差 <2cm / <2°
       ↓
-⑥ 建图参数对吗？      minimum_travel_distance 0.3、闭环门槛 0.5/0.6
+⑥ TF 只有一个源吗？   每个坐标系只允许一个发布者（坑 10、12）
       ↓
-⑦ 开得够慢吗？        speed 0.30 / turn 0.20，停稳再转
+⑦ 建图参数对吗？      minimum_travel_distance 0.3、闭环门槛 0.5/0.6、扫描匹配开
       ↓
-⑧ map→odom 填了吗？   建完读值、换算弧度、填进 nav2.launch.py
+⑧ 开得够慢吗？        speed 0.30 / turn 0.20，停稳再转
       ↓
-⑨ Nav2 起得来吗？     BT 插件同步、进程杀干净
+⑨ map→odom 对吗？     amcl 实时发，或填实测值（yaw 用弧度）
+      ↓
+⑩ Nav2 起得来吗？     BT 插件同步、进程杀干净
 ```
 
-**核心体会**：地图不对，**先怀疑里程计，再怀疑 SLAM**。我一开始一直在调 SLAM 参数（闭环门槛、扫描阈值），越调越乱；直到把 `wheel_separation` 修正、做完标定，问题才一次性全部消失。
+## 症状速查表
+
+| 你看到的现象 | 先查这个 |
+|---|---|
+| 墙斜了 / 房间是梯形 | `wheel_separation`（坑 1） |
+| 墙有锯齿、双层 | 转弯太快、边走边转（坑 2） |
+| 位姿突然跳到隔壁房间 | 误闭环门槛（坑 3） |
+| 位姿在两个位置之间跳 | `odom` TF 有两个发布者（坑 10） |
+| 墙很厚、散点很多 | `use_scan_matching`（坑 11） |
+| 点云跟着车一起转 | 里程计没标定（坑 6） |
+| 导航时车在地图外 | `map→odom` / amcl 初始位姿（坑 7） |
+| 机器人不显示、`frame does not exist` | 两套 nav2 / 没有 odom TF（坑 12） |
+| 建图中途崩 | 内存累积（坑 4） |
 
 ---
 
-## 附：一键诊断脚本
+<a id="diag"></a>
+## 附录｜一键诊断脚本
 
 ```bash
 source ~/robot_ws/install/setup.bash
 
-echo "=== 进程 ==="
-for p in gzserver gzclient rviz2 slam_toolbox; do
-  echo "  $p: $(pgrep -c $p)"
+echo "=== 进程（重复就是坑 8/12）==="
+for p in gzserver gzclient rviz2 slam_toolbox ekf_node controller_server amcl; do
+  echo "  $p: $(pgrep -fc $p)"
 done
 
 echo "=== 控制器 ==="
 ros2 control list_controllers
 
 echo "=== 话题 ==="
-ros2 topic hz /scan & sleep 3; kill %1 2>/dev/null
+timeout 3 ros2 topic hz /scan
 ros2 topic list | grep -E "odom|map|scan"
 
 echo "=== 参数 ==="
 ros2 param get /diff_drive_controller wheel_separation
+ros2 param get /diff_drive_controller enable_odom_tf
 ros2 param get /slam_toolbox do_loop_closing
+ros2 param get /slam_toolbox use_scan_matching
 
-echo "=== TF ==="
-ros2 run tf2_ros tf2_echo map odom
+echo "=== TF（谁在发 odom）==="
+ros2 run tf2_ros tf2_echo odom base_footprint
 ```
 
-以上就是整个排坑过程。祝你的小车一次建图成功 🚗
+---
+
+**最后一句**：地图不对，**先怀疑里程计，再怀疑 SLAM**。
+
+把 `wheel_separation` 修对、把里程计标定完，再确保 TF 只有一个源、扫描匹配是开着的——这四件事做完，我前面那 12 个坑里有 10 个根本不会出现。
+
+祝你的小车一次建图成功 🚗
