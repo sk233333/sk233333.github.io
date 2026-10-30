@@ -2,7 +2,7 @@
 title: "ROS2 差速小车建图导航：从地图扭曲到点云与墙完全重合"
 published: 2026-10-24
 description: "Gazebo + slam_toolbox + Nav2 实录：12 个坑逐一拆解——地图变形、锯齿墙、误闭环、位姿瞬移、map→odom 差 5 米、EKF 抢 TF、扫描匹配关掉后墙变厚。每个坑都给现象、根因、定位命令和验证标准。"
-image: "/image/robot_slam/p0.png"
+image: "/image/nav2-0/car1.jpg"
 category: "ROS2学习日常"
 draft: false
 tags: [ROS2, GAZEBO, SLAM, NAV2, slam_toolbox, 建图, 导航, 里程计标定, robot_localization, EKF]
